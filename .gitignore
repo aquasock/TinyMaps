@@ -1,0 +1,10 @@
+# generated map packs and previews — rebuilt by tools/maps_pack.py
+work/
+*.tmpk
+*.bin
+*.fs
+
+# tooling
+__pycache__/
+*.pyc
+.venv/
