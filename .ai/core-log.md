@@ -125,3 +125,36 @@ Bilinear resampling, then overlapping the next line's fetch with the current lin
 - User Test: N/A
 
 ---
+
+## 4 COMMIT Unreleased 2026-10-26T02:38:03-07:00
+
+#### Coming From:
+
+Unreleased dbcf8e1
+
+#### Purpose:
+
+Finish the renderer: add bilinear resampling and the prefetch-and-reuse machinery that real-time drawing at 1280x720 needs.
+
+#### Outcome:
+
+`maps_render` now resamples bilinear as well as nearest and keeps three row buffers so the row the next line needs is fetched while the current line is drawn; `ahb_sdram`'s handshake read port was replaced with a streaming one, since a per-entry handshake costs two cycles an entry and cannot fit a 1284-entry row into a 1650-clock line. `sim/tb_maps_render.sv` grew to five cases over the same 256x192 synthetic level -- nearest at 1.000 and 1.990, bilinear at 1.500, 1.750 and 0.750 -- and `tools/check_render.py` reproduces the renderer's rounding lerp exactly, so a match means the datapath agrees rather than that two implementations share a formula nobody checked; all five cases match pixel for pixel. A `fetch_count` output was added so the test reports whether row reuse actually engages: at `step_y` 1.000 it shows 50 fetches for 48 lines against 49 ideal, which means the rotation and the overlapped prefetch work, but at the other four steps it shows two fetches per line, which is correct output drawn through the blocking path with no overlap. Real-time operation is therefore NOT established, and the reason is specific: the rotation assumes the source row advances by at most one per output line, which holds only for `step_y` at or below 1, and above that a row can advance by two. The core builds at seed 1 to `tinymaps.3a6ab3805b75.bin` with `clk` at 413.22 MHz against 21.49 and `hclk` at 148.48 against 74.25. Five defects were found by the testbench. The blend function's intermediate product was evaluated at the eight-bit width of its return value, so every blend truncated to zero. The entry index was computed as `col>>1` while the byte-selection logic assumed the entry holding `col+1`. The window started at the first needed entry, leaving the first pixel of every line without a previous entry, which broke exactly eight pixels per line at one step. The previous-entry registers were reloaded every cycle rather than only when the entry index advanced, so they went stale whenever it stalled, which is every magnified pixel. And the blocking fetch never primed a third buffer, so the reuse could never start and every line re-fetched. Deployment and user test did not apply: this cycle is simulation only. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Make row reuse hold across the whole `step_y` range by handling a two-row advance at a line boundary, which is the one thing between the current renderer and real time at 1280x720; `fetch_count` is the instrument for it. Then integration: wire `maps_link_rx`, `maps_render` and `sdram_ctrl` into `tinymaps_top`, add the adapter between the renderer's streaming port and `ahb_sdram`'s video channel, and align the renderer's output with the HDMI pixel counters.
+
+#### Files Modified:
+
+- README.md
+- fpga/tinymaps/maps_render.sv
+- sim/tb_maps_render.sv
+- tools/check_render.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: N/A
+- User Test: N/A
+
+---

@@ -106,17 +106,24 @@ pixels and each output pixel costs one block RAM read plus a 256-entry palette
 lookup. `tools/check_render.py` recomputes what the testbench ran from the
 parameters it wrote out and compares every pixel.
 
-Two things it does not do yet, both required before it can be called real time
-at 1280x720:
+Resampling is bilinear, with a nearest path for comparison. Three row buffers
+are kept: two are read for the current line and the third is prefetched during
+it. The testbench checks `fetch_count`, which exposes whether row reuse and the
+overlapped prefetch are actually happening rather than silently falling back.
 
-- **Bilinear.** It resamples nearest only. Bilinear needs both source rows live
-  with a previous-entry register on each; with `step_x < 2` the entry index
-  advances by at most one per pixel, so one register per row is enough.
-- **Overlap.** It fetches a line's window and then emits the line, serially:
-  1282 fetch cycles plus 1280 emit cycles against 1650 pixel clocks. Real time
-  needs the next line's fetch to run while the current line emits, and a source
-  row reused when two output lines map to it, which brings the fetch to 1282
-  cycles and lets it overlap the 1280 emits.
+What the counter says, and what it means:
+
+- At `step_y = 1.000`, 50 row fetches for 48 lines against 49 ideal, so the
+  rotation and the overlapped prefetch both work.
+- Above or below that, the counter shows two fetches per line: correct output,
+  but the blocking path and no overlap. The rotation assumes the source row
+  advances by at most one per output line. That holds when `step_y <= 1`; with
+  `step_y > 1` a row can advance by two, and the reuse does not engage.
+
+So real-time operation is **not** established. The structure for it is in
+place -- three buffers, a streaming source port, a prefetch issued during the
+emit -- and the reuse is measured working in one regime. Making it hold across
+the whole `step` range is the remaining work.
 
 ## Attribution
 
