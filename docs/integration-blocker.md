@@ -65,7 +65,16 @@ serialiser's multiplexers into the encoder's disparity path. Both netlists infer
 - **Hierarchy boundary** — `setattr -mod -set keep_hierarchy 1` on `hdmi`,
   `serializer` and `tmds_channel` produced byte-identical timing;
   `synth_gowin` flattens regardless.
-- **ABC9** — `synth_gowin -abc9` produced identical timing.
+- **ABC9 flag** — `synth_gowin -abc9` produced identical timing (the pass chain
+  already runs `abc9 -maxlut 8 -W 500` in `map_luts`, so the flag was a no-op).
+- **Staged ABC at lower effort** — `synth_gowin -run begin:map_luts`, then
+  `abc9 -maxlut 8 -W 100`, then `-run map_cells:`, gave **63.65 MHz**, worse.
+- **`-noflatten`** — ABC can no longer merge across the boundary, but nextpnr
+  then rejects the netlist with `Unconstrained IO: u_sdram.write_IBUF_I`, since
+  IOBs are emitted inside modules. Would need `-noiopads`, which leaves the top
+  ports without pad cells.
+- **Registering `rgb`** — the HDMI input was a combinational `cy < OUT_H` mux
+  where the desktop's is a flop output. Making it a register gave 66.16 MHz.
 
 ## What is left
 
@@ -80,8 +89,15 @@ serialiser's multiplexers into the encoder's disparity path. Both netlists infer
    compensated downstream and verified in simulation against the current
    behaviour — an encoder change that shifts one pixel looks right and is not.
 
-Option 1 is the one to try first: it changes no logic and needs no new
-simulation harness.
+Nine levers are now exhausted. Option 1 has no reachable form through
+`synth_gowin`: attributes are flattened away, `-abc9` is already in use, lower
+effort is worse, and `-noflatten` breaks IO handling. What is left of option 1
+is synthesising the HDMI stage as its own nextpnr-compatible netlist and
+stitching, which is a different kind of work.
+
+That makes option 2 — pipeline the encoder between `q_m` and the disparity
+accumulator — the realistic route, with a simulation harness comparing output
+against the current encoder before and after.
 
 ## Also outstanding
 
