@@ -100,6 +100,13 @@ IO_PORT "sdram_cas_n" IO_TYPE=LVCMOS33;
 IO_LOC "sdram_cs_n" F21;      // was F19 on mega60k
 IO_PORT "sdram_cs_n" IO_TYPE=LVCMOS33;
 
+// UART to the BL616, the loader's transport.  Same pins as TinyTang's desktop
+// core: the board wires the BL616's UART1 (TX GPIO 28, RX GPIO 27) here.
+IO_LOC "uart_rx" V14;
+IO_PORT "uart_rx" IO_TYPE=LVCMOS33;
+IO_LOC "uart_tx" U15;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33;
+
 // PLL placement, from TinyTang's desktop core (the open-flow build of record on
 // this board).  Without these nextpnr lands pll_nes in a row-108 gap and the
 // HDMI PLL's 371.25 MHz output crosses the die on general routing.

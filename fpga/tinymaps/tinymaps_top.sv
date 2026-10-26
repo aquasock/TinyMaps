@@ -15,10 +15,11 @@
 // a finished line.  The two line buffers alternate by line parity for the same
 // reason.
 //
-// Not wired yet: the pack loader.  sdram_ctrl's A25 write port is idle and the
-// viewport registers are constants, so the SDRAM holds nothing and the picture
-// is the default palette over empty memory.  maps_link_rx is finished and
-// verified; it needs a UART receiver and the 0xAA frame parser in front of it.
+// The pack loader is wired: maps_uart_rx and maps_uart_tx carry the BL616's
+// link, and maps_link_rx parses its 0xAA frames and writes the payload through
+// sdram_ctrl's A25 port.  The viewport registers are still constants and the
+// palette is still the fabric grey ramp, so what is on screen is whatever the
+// loaded image looks like through that ramp.
 //
 // SPDX-License-Identifier: GPL-3.0-only
 
@@ -28,6 +29,10 @@ module tinymaps_top #(
     parameter int VIDEOID = 4                 // VIC 4 = 1280x720p60
 ) (
     input         sys_clk,                    // 50 MHz crystal
+
+    // UART to the BL616: the pack loader's transport
+    input         uart_rx,
+    output        uart_tx,
 
     // HDMI TX
     output        tmds_clk_n,
@@ -102,13 +107,17 @@ reg [23:0] pal [0:255];
 always @(posedge hclk) if (pal_we) pal[pal_idx] <= pal_data;
 
 // ----------------------------------------------------------------- renderer --
-// Viewport registers are constants for now; the loader will own them.
+// Viewport registers are constants for now; a level selector will own them.
+// They are set for a 768x768 eight-bit level at byte 0 of the SDRAM, which is
+// what tools/maps_test_image.py writes and what the pack's L3 level is: at 0.6
+// source pixels per output pixel the level's 768 columns fill the 1280-pixel
+// line exactly, and 0.6 is inside the (0.5, 1] the renderer needs.
 localparam signed [31:0] SRC_X0 = 32'd0;
 localparam signed [31:0] SRC_Y0 = 32'd0;
-localparam        [31:0] STEP   = 32'h0000_C000;     // 0.75 source px per output px
+localparam        [31:0] STEP   = 32'd39322;         // 0.600006 source px per output px
 localparam        [24:0] LEVEL_BASE = 25'd0;
-localparam        [15:0] LEVEL_W = 16'd4608;
-localparam        [15:0] LEVEL_H = 16'd4608;
+localparam        [15:0] LEVEL_W = 16'd768;
+localparam        [15:0] LEVEL_H = 16'd768;
 
 wire [10:0] cx;
 wire [9:0]  cy;
@@ -173,10 +182,26 @@ wire        v_vdone;
 wire        sd_ack, sd_ready;
 wire [63:0] sd_rdata;
 
+// ------------------------------------------------------------------- loader --
+// The pack arrives over the BL616's UART in 0xAA frames.  maps_link_rx parses
+// the frames itself and writes the payload through the SDRAM's A25 port, which
+// the renderer never touches: sdram_ctrl arbitrates between that port and the
+// video line and gives the video priority, so a load cannot stall a line.
+wire [7:0]  urx_data;
+wire        urx_valid;
+wire        utx_start;
+wire [7:0]  utx_data;
+wire        utx_busy;
+wire        ld_req;
+wire [24:3] ld_addr;
+wire [7:0]  ld_lanes;
+wire [63:0] ld_wdata;
+
 sdram_ctrl #(.CL(3), .INIT_CYCLES(15000), .REFRESH_CYCLES(525)) u_sdram (
     .clk(hclk), .resetn(rstn_h),
-    // the loader's port: idle until it is wired
-    .req(1'b0), .write(1'b0), .addr(21'd0), .lanes(8'd0), .wdata(64'd0),
+    // the loader's port
+    .req(ld_req), .write(ld_req), .addr(ld_addr), .lanes(ld_lanes),
+    .wdata(ld_wdata),
     .ack(sd_ack), .rdata(sd_rdata), .ready(sd_ready),
     .vstart(v_vstart), .vaddr(v_vaddr),
     .vvalid(v_vvalid), .vindex(v_vindex), .vdata(v_vdata), .vdone(v_vdone),
@@ -184,6 +209,24 @@ sdram_ctrl #(.CL(3), .INIT_CYCLES(15000), .REFRESH_CYCLES(525)) u_sdram (
     .sdram_cs_n(sdram_cs_n), .sdram_ras_n(sdram_ras_n), .sdram_cas_n(sdram_cas_n),
     .sdram_we_n(sdram_we_n), .sdram_ba(sdram_ba), .sdram_a(sdram_a),
     .sdram_dqm(sdram_dqm), .sdram_dq(sdram_dq)
+);
+
+maps_uart_rx #(.CLK_HZ(74_250_000), .BAUD(2_000_000)) u_uart_rx (
+    .clk(hclk), .resetn(rstn_h), .rx(uart_rx),
+    .data(urx_data), .valid(urx_valid));
+
+maps_uart_tx #(.CLK_HZ(74_250_000), .BAUD(2_000_000)) u_uart_tx (
+    .clk(hclk), .resetn(rstn_h), .start(utx_start), .data(utx_data),
+    .tx(uart_tx), .busy(utx_busy));
+
+maps_link_rx u_loader (
+    .clk(hclk), .resetn(rstn_h),
+    .rx_data(urx_data), .rx_valid(urx_valid),
+    .tx_start(utx_start), .tx_data(utx_data), .tx_busy(utx_busy),
+    .wr_req(ld_req), .wr_addr(ld_addr), .wr_lanes(ld_lanes),
+    .wr_wdata(ld_wdata), .wr_ack(sd_ack),
+    .busy(), .images(), .bytes_written(), .last_nak(),
+    .overflows(), .timeouts()
 );
 
 // ------------------------------------------------------------- line store ---

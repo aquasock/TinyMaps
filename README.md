@@ -8,15 +8,15 @@ and the apicula fork).
 
 ## State
 
-Phases 0 to 3 are done and verified by simulation. The integration is written
-and **closes timing**: `hclk` reaches 84.28 MHz against the 74.25 MHz a 720p
-line needs, at placement seed 1, so the flow packs a bitstream. That bitstream
-was deployed on 2026-10-26 and runs on the Tang: HDMI locks 1280x720p60 and the
-picture is stable, which is what the design draws with no pack loaded -- the
-palette over empty SDRAM. The loader is not wired, so there is no map yet.
-`docs/HANDOFF.md` holds the state, the decisions and the next action;
-`docs/integration-blocker.md` holds the timing measurements, the fix and the
-levers that were ruled out.
+Phases 0 to 3 are done and verified by simulation. The integration **closes
+timing** -- `hclk` at 83.06 MHz against the 74.25 MHz a 720p line needs, at
+placement seed 1 -- so the flow packs a bitstream, and an earlier one was
+deployed and confirmed on the Tang: HDMI locks 1280x720p60 and the picture is
+stable. The pack loader is now wired as well, so an image can be sent over the
+BL616's UART; that build has passed its simulations and packed a bitstream but
+has not been on the board yet. `docs/HANDOFF.md` holds the state, the decisions
+and the next action; `docs/integration-blocker.md` holds the timing
+measurements, the fix and the levers that were ruled out.
 
 ## Building
 
@@ -33,10 +33,11 @@ land in `build/tinymaps/open-s<seed>/`, named after their own sha256 prefix.
 
 `fpga/tinymaps/tinymaps_top.sv` carries the renderer `maps_render.sv`, its row
 adapter `maps_video_rd.sv`, the SDRAM engine `sdram_ctrl.sv` (vended from
-TinyNES's `ahb_sdram.sv`, renamed only) and the HDMI stage `maps_hdmi.sv`. The
-load receiver `maps_link_rx.sv` is written and proven in simulation but is not
-instantiated: the write port is idle, the viewport registers are constants, and
-the picture is the default palette over empty memory.
+TinyNES's `ahb_sdram.sv`, renamed only), the HDMI stage `maps_hdmi.sv` and the
+load path: `maps_uart_rx.sv` and `maps_uart_tx.sv` on the BL616's link and
+`maps_link_rx.sv` behind them. The viewport registers are constants and the
+palette is still a grey ramp in fabric, so a loaded image is shown through that
+ramp rather than in its own colours.
 
 ## Simulation
 
@@ -44,10 +45,12 @@ the picture is the default palette over empty memory.
     tools/run_sim.sh tb_maps_link_rx
 
 Verilator `--binary --timing`; each testbench prints `RESULT: PASS` or
-`RESULT: FAIL` and the script's exit code follows it. Two testbenches only
-capture data, and their captures are judged afterwards by a separate checker:
-`tools/check_render.py` for the emitted pixels and `tools/check_tmds.py` for the
-coded TMDS stream.
+`RESULT: FAIL` and the script's exit code follows it. `tb_maps_uart` carries
+bytes both ways over the link's wire format, with jitter on every bit edge and a
+framing error, and then sends the same bytes out through the transmitter and
+back in through the receiver. Two testbenches only capture data, and their
+captures are judged afterwards by a separate checker: `tools/check_render.py`
+for the emitted pixels and `tools/check_tmds.py` for the coded TMDS stream.
 
 ## HDMI encoder
 
@@ -79,6 +82,28 @@ destination being an SDRAM byte address:
 
 Answered ACK 0x06 or NAK 0x15 then a letter: 'H' header CRC, 'C' block CRC,
 'I' image CRC, 'T' timeout. A NAKed block is re-sent from its own address.
+
+The receiver parses the link's frames itself -- `0xAA len_hi len_lo cmd
+payload`, the length big-endian counting the command byte and below 2048 -- and
+takes the payload of command `0x07`. `maps_uart_rx` and `maps_uart_tx` carry the
+2 Mbaud wire at 74.25 MHz, and the loader writes through `sdram_ctrl`'s A25
+port, which the renderer never touches: the controller arbitrates and gives the
+video line priority.
+
+Loading an image from the host:
+
+    tools/maps_test_image.py                 # work/test/test-image.bin
+    tools/load_image.py work/test/test-image.bin
+
+`load_image.py` asks the board whether its console is at a shell prompt, runs
+`fpgapipe` to hand the console to the core, then sends the header and blocks,
+framing everything and waiting for each answer. The test image is a 12 by 12
+grid of flat cells stepping from white at the top left to black at the bottom
+right, which the shipped viewport constants (768x768 level, 0.6 source pixels
+per output pixel) draw as a staircase filling the line.
+
+Not implemented yet: the loader has no idle timeout (the `TIMEOUT` parameter is
+unused), and the palette it would need is still the fabric grey ramp.
 
 ## Map packs
 

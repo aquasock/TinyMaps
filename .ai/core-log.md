@@ -296,3 +296,43 @@ Wire the pack loader, which is now also the only way to prove the picture path: 
 - User Test: PASS
 
 ---
+
+## 9 COMMIT Unreleased 2026-10-26T10:17:01-07:00
+
+#### Coming From:
+
+Unreleased 1595480
+
+#### Purpose:
+
+Wire the pack loader so a known image can be sent over the BL616 link and the renderer's output checked against it.
+
+#### Outcome:
+
+Added `fpga/tinymaps/maps_uart_rx.sv` and `fpga/tinymaps/maps_uart_tx.sv`, an 8N1 pair for the link's 2 Mbaud at `hclk`, sampled from a 16x fractional baud tick so the two frequencies divide exactly; `tinymaps_top.sv` now instantiates both with `maps_link_rx` behind them, taking the receiver's bytes and returning the loader's ACK or NAK, and `maps_link_rx`'s write port drives `sdram_ctrl`'s A25 port, which the renderer never touches because the controller arbitrates between that port and the video line and gives the video priority. The receiver parses the link's `0xAA len_hi len_lo 0x07 payload` frames itself, so no separate frame parser exists to fall out of step with it. The UART pins are V14 and U15, the same ones TinyTang's desktop core uses. `sim/tb_maps_uart.sv` drives the receiver's pin with a bit-level sender whose every edge is placed at its ideal time plus up to 40 ns of bounded jitter, recovers 256 bytes exactly, proves a byte with a low stop bit is dropped and the line recovers for the byte after it, and then sends the same 256 bytes out through the transmitter and back in through the receiver, so the transmitter is judged by a receiver whose reading of the wire was established against an independent sender; it passes under Verilator and iverilog. Two host tools were added: `tools/maps_test_image.py` writes a 768x768 eight-bit raster that is a 12 by 12 grid of flat cells stepping from 255 at the top left to 0 at the bottom right inside a four-pixel white border, and `tools/load_image.py` asks the board whether its console is at a shell prompt, opens `fpgapipe`, and sends the `TML1` header and 8192-byte blocks with their CRC-32s, framing every payload byte and waiting for each answer exactly as the module's protocol defines; its framing was checked byte for byte against the sequence `tb_maps_link_rx` drives, which the RTL already accepts. The viewport constants were pointed at that image: a 768x768 level at SDRAM byte 0 with a step of 39322, 0.600006 source pixels per output pixel, which is inside the (0.5, 1] the renderer needs and fills the 1280-pixel line exactly. The core builds at placement seed 1 to `tinymaps.8fe42ba24d8d.bin` (`tinymaps.ea8a7368d345.fs`, 4,381,164 and 35,071,973 bytes) with `hclk` at 83.06 MHz against 74.25 and `clk` at 426.26 against 21.49, setup=0 and hold=0, and a rebuild from an empty `build/` reproduced both hashes; the post-placement `hclk` estimate of 61.79 MHz failed and routing brought it to 83.06, which is why the gate reads the post-route report. Every testbench passes: `tb_maps_link_rx`, `tb_maps_render` with `check_render` matching all five viewports, `tb_hdmi_encode` with `check_tmds`, and the new `tb_maps_uart`. Two things are knowingly incomplete and recorded in `README.md` and `docs/HANDOFF.md`: the loader has no idle timeout, its `TIMEOUT` parameter being unused, and the palette is still the fabric grey ramp, so a loaded image would appear in grey rather than in the pack's own colours. Deployment and user test did not run because the user asked for the bitstream to be built and verified but held back from the board, so this build has never run on hardware and the loader remains unproven there. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Put `tinymaps.8fe42ba24d8d.bin` on the card with TinyTang's `tangput`, `tangload` it, and run `tools/load_image.py work/test/test-image.bin`: the screen should become the 12 by 12 staircase in grey, which would be the first known image through the renderer and the first exercise of the loader and its UART pins on hardware. If that arrives, replace the fabric grey ramp with the pack's own 256-entry palette, which means deciding how the loader supplies it, and then add the level selector that holds `step` inside `(0.5, 1]` across the pack's four levels.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/build.tcl
+- fpga/tinymaps/maps_uart_rx.sv
+- fpga/tinymaps/maps_uart_tx.sv
+- fpga/tinymaps/tinymaps.cst
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_uart.sv
+- tools/load_image.py
+- tools/maps_open/synth.ys
+- tools/maps_test_image.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---
