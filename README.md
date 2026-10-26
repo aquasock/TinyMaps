@@ -14,7 +14,7 @@ placement seed 1 -- so the flow packs a bitstream, and that bitstream runs on
 the Tang. The pack loader works on hardware too: an image sent over the BL616's
 UART lands in the SDRAM and is drawn, which was checked on 2026-10-26 with a
 known test image rather than by eye. The palette is still a grey ramp in fabric,
-so an image appears in grey. The first hardware capture also showed the levels
+so an image appears in grey unless a palette is sent with it. The first hardware capture also showed the levels
 lifted and clipped at the top -- the sink reading full-range RGB as limited
 range -- so the AVI InfoFrame now declares full range, and that build is on the
 board. The declaration does not change what a capture of the output shows: the
@@ -117,8 +117,21 @@ grid of flat cells stepping from white at the top left to black at the bottom
 right, which the shipped viewport constants (768x768 level, 0.6 source pixels
 per output pixel) draw as a staircase filling the line.
 
+The palette arrives on command `0x08`, parsed by the same receiver:
+
+    u16 start    first entry, 0-255        u16 count   entries that follow
+    count * 3    R, G, B each              u32 crc     over the bytes above
+
+Answered ACK, or NAK 'P' for a bad CRC. Entries are written as they arrive, so a
+refused palette has already been applied and the sender re-sends it. The fabric
+fills a grey ramp at power-on and the link owns the table afterwards.
+
+    tools/load_palette.py                     # the pack's own 256 entries
+    tools/maps_pack.py extract work/pack/phoenix-18km.tmpk 3
+    tools/load_image.py work/test/level3.bin
+
 Not implemented yet: the loader has no idle timeout (the `TIMEOUT` parameter is
-unused), and the palette it would need is still the fabric grey ramp.
+unused).
 
 ## Map packs
 

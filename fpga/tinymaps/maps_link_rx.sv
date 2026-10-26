@@ -22,6 +22,19 @@
 // re-sent from its own start address, so rewriting it is harmless.  The sender
 // is stop-and-wait, so nothing arrives until it has been answered.
 //
+// Command 0x08 loads the palette the pixel path reads.  Its payload, all
+// little-endian:
+//
+//     u16 start    first entry to write, 0-255
+//     u16 count    entries that follow
+//     count * 3    R, G, B for each entry, ascending index
+//     u32 crc      CRC-32 over the bytes above, complemented
+//
+// Answered ACK, or NAK 'P' for a bad CRC.  Entries are written as they arrive
+// rather than buffered, so a rejected palette has already been applied; the
+// sender re-sends it and every entry is written again, which is idempotent.
+// A palette for the whole table is 772 bytes, inside the frame limit.
+//
 // The write port is ahb_sdram's A25 side: req, address, lanes and data held
 // steady until ack pulses.  Bytes are assembled little-endian into a 64-bit
 // word and issued with all eight lanes; a short tail goes out with only the
@@ -56,6 +69,11 @@ module maps_link_rx #(
     output reg  [7:0]  wr_lanes,
     output reg  [63:0] wr_wdata,
     input  wire        wr_ack,
+
+    // palette writes, straight into the table the pixel path reads
+    output reg         pal_we,
+    output reg  [7:0]  pal_idx,
+    output reg  [23:0] pal_data,
 
     // status
     output reg         busy,
@@ -95,6 +113,22 @@ reg  [7:0]  fcmd;
 reg  [11:0] fleft;
 reg         pl_valid;
 reg  [7:0]  pl_data;
+
+// ---------------------------------------------------------------- palette ----
+// Command 0x08.  The payload is walked a byte at a time: two for the start
+// index, two for the count, three per entry, four for the CRC.
+localparam [2:0] P_IDLE = 3'd0, P_START_LO = 3'd1, P_START_HI = 3'd2,
+                 P_CNT_LO = 3'd3, P_CNT_HI = 3'd4, P_ENTRY = 3'd5, P_CRC = 3'd6;
+
+reg  [2:0]  ps;
+reg         pal_valid;
+reg  [7:0]  pal_byte;
+reg  [15:0] pal_start, pal_count, pal_ent;
+reg  [1:0]  pal_b;                  // byte within an entry, or within the CRC
+reg  [7:0]  pal_r, pal_g;
+reg  [31:0] pal_crc;                // running CRC over start, count and entries
+reg  [31:0] pal_rx;                 // the CRC as it arrives
+reg  [31:0] palettes;
 
 // ----------------------------------------------------------------- loader ----
 localparam [3:0] S_MAGIC = 4'd0, S_ADDR = 4'd1, S_LEN  = 4'd2, S_ICRC = 4'd3,
@@ -137,6 +171,11 @@ always @(posedge clk or negedge resetn) begin
     if (!resetn) begin
         fs <= F_IDLE; flen <= 16'd0; fcmd <= 8'd0; fleft <= 12'd0;
         pl_valid <= 1'b0; pl_data <= 8'd0;
+        ps <= P_IDLE; pal_valid <= 1'b0; pal_byte <= 8'd0;
+        pal_start <= 16'd0; pal_count <= 16'd0; pal_ent <= 16'd0;
+        pal_b <= 2'd0; pal_r <= 8'd0; pal_g <= 8'd0;
+        pal_crc <= 32'hFFFFFFFF; pal_rx <= 32'd0; palettes <= 32'd0;
+        pal_we <= 1'b0; pal_idx <= 8'd0; pal_data <= 24'd0;
         st <= S_MAGIC; after_tx <= S_MAGIC;
         bidx <= 2'd0; cidx <= 2'd0; word <= 32'd0;
         img_addr <= 32'd0; img_len <= 32'd0; img_left <= 32'd0;
@@ -154,6 +193,8 @@ always @(posedge clk or negedge resetn) begin
         idle_cnt <= 20'd0;
     end else begin
         pl_valid <= 1'b0;
+        pal_valid <= 1'b0;
+        pal_we <= 1'b0;
         tx_start <= 1'b0;
 
         // ---------------------------------------------------- frame parser --
@@ -169,11 +210,21 @@ always @(posedge clk or negedge resetn) begin
                             fcmd  <= rx_data;
                             fleft <= flen[11:0] - 12'd1;
                             fs    <= F_DATA;
+                            if (rx_data == 8'h08) begin
+                                ps      <= P_START_LO;
+                                pal_ent <= 16'd0;
+                                pal_b   <= 2'd0;
+                                pal_crc <= 32'hFFFFFFFF;
+                                pal_rx  <= 32'd0;
+                            end
                         end else fs <= F_IDLE;
                 F_DATA: begin
                             if (fcmd == 8'h07) begin
                                 pl_valid <= 1'b1;
                                 pl_data  <= rx_data;
+                            end else if (fcmd == 8'h08) begin
+                                pal_valid <= 1'b1;
+                                pal_byte  <= rx_data;
                             end
                             if (fleft == 12'd1) fs <= F_IDLE;
                             else fleft <= fleft - 12'd1;
@@ -193,6 +244,71 @@ always @(posedge clk or negedge resetn) begin
                     busy <= 1'b0;
                 end
             end
+        end
+
+        // -------------------------------------------------------- palette --
+        // Entries are written as their third byte arrives, so the table is
+        // updated a cycle after each triple rather than at the end.  The reply
+        // borrows the loader's sender: a palette command and an image transfer
+        // cannot be in flight together, because the host is stop-and-wait.
+        if (pal_valid) begin
+            case (ps)
+                P_START_LO: begin
+                    pal_start[7:0] <= pal_byte;
+                    pal_crc <= crc32_byte(pal_crc, pal_byte);
+                    ps <= P_START_HI;
+                end
+                P_START_HI: begin
+                    pal_start[15:8] <= pal_byte;
+                    pal_crc <= crc32_byte(pal_crc, pal_byte);
+                    ps <= P_CNT_LO;
+                end
+                P_CNT_LO: begin
+                    pal_count[7:0] <= pal_byte;
+                    pal_crc <= crc32_byte(pal_crc, pal_byte);
+                    ps <= P_CNT_HI;
+                end
+                P_CNT_HI: begin
+                    pal_count[15:8] <= pal_byte;
+                    pal_crc <= crc32_byte(pal_crc, pal_byte);
+                    pal_b  <= 2'd0;
+                    ps <= ({pal_byte, pal_count[7:0]} == 16'd0) ? P_CRC : P_ENTRY;
+                end
+                P_ENTRY: begin
+                    pal_crc <= crc32_byte(pal_crc, pal_byte);
+                    case (pal_b)
+                        2'd0: begin pal_r <= pal_byte; pal_b <= 2'd1; end
+                        2'd1: begin pal_g <= pal_byte; pal_b <= 2'd2; end
+                        default: begin
+                            pal_we   <= 1'b1;
+                            pal_idx  <= pal_start[7:0] + pal_ent[7:0];
+                            pal_data <= {pal_r, pal_g, pal_byte};
+                            pal_b    <= 2'd0;
+                            pal_ent  <= pal_ent + 16'd1;
+                            if (pal_ent + 16'd1 >= pal_count) ps <= P_CRC;
+                        end
+                    endcase
+                end
+                P_CRC: begin
+                    pal_rx[8*pal_b +: 8] <= pal_byte;
+                    pal_b <= pal_b + 2'd1;
+                    if (pal_b == 2'd3) begin
+                        if (~pal_crc == {pal_byte, pal_rx[23:0]}) begin
+                            palettes <= palettes + 32'd1;
+                            tx_b0 <= ACK; tx_b1 <= 8'd0; tx_two <= 1'b0;
+                        end else begin
+                            last_nak <= "P";
+                            tx_b0 <= NAK; tx_b1 <= "P"; tx_two <= 1'b1;
+                        end
+                        tx_step  <= 2'd0;
+                        tx_i     <= 1'b0;
+                        after_tx <= S_MAGIC;
+                        st       <= S_TX;
+                        ps       <= P_IDLE;
+                    end
+                end
+                default: ps <= P_IDLE;
+            endcase
         end
 
         // Write port acknowledge.  Held until ack, which ahb_sdram pulses as

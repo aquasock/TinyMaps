@@ -164,6 +164,24 @@ def main():
     if cmd == "fetch": fetch(ls); return 0
     if cmd == "pack":  pack(ls);  return 0
     if cmd == "verify": return verify(sys.argv[2])
+    if cmd == "extract":
+        # the raw eight-bit raster of one level, for tools/load_image.py
+        if len(sys.argv) < 4:
+            print("usage: maps_pack.py extract <pack> <level 0-3> [-o out.bin]"); return 1
+        pk = read_pack(sys.argv[2])
+        want = int(sys.argv[3])
+        for lv in pk["levels"]:
+            if lv["level"] == want:
+                out = "work/test/level%d.bin" % want
+                if len(sys.argv) > 5 and sys.argv[4] == "-o":
+                    out = sys.argv[5]
+                import os
+                os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+                open(out, "wb").write(lv["idx"].tobytes())
+                print(f"{out}: L{want} z{lv['zoom']} {lv['w']}x{lv['h']}, "
+                      f"{lv['w']*lv['h']} bytes")
+                return 0
+        print(f"no level {want} in {sys.argv[2]}"); return 1
     if cmd == "preview": pack_path = sys.argv[2] if len(sys.argv) > 2 else OUT; preview(pack_path); return 0
     print("unknown command"); return 1
 

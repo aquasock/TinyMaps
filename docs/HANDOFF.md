@@ -7,9 +7,12 @@
   pitch, the staircase running white to dark from the top left, the level's
   border where it belongs. That is the first known image through the renderer,
   and it exercises the loader, both UARTs, the framing, the CRCs and the
-  renderer's addressing at once. What is left is colour: the palette is still a
-  grey ramp in fabric, and the picture arrives lifted and clipped at the top
-  because the sink treats the RGB as limited range.
+  renderer's addressing at once. The palette now arrives over the link too, so
+  the screen shows the real Phoenix map in its own colours. Two things are open:
+  the picture arrives lifted and clipped at the top because the sink treats the
+  RGB as limited range, and the first five lines of each frame are drawn from
+  stale rows (measured 2026-10-26: rows 0-4 wrong, rows 5 and below matching the
+  level at correlation 0.70-0.91).
 
 - **Landed:** `79bd168` scaffold + pack builder · `1e1de8f` Phase 0 skeleton ·
   `2e8ea8e` Phase 2 load receiver · `dbcf8e1` Phase 3 nearest renderer ·
@@ -69,18 +72,27 @@
     modules carry the parameter with their defaults unchanged. Note that this
     did **not** change what a capture shows — see Unverified — so the
     declaration is the honest thing to send, not a fix for the capture.
+  - **The palette arrives as command 0x08 on the link**, parsed by
+    `maps_link_rx` alongside the image load, and written straight into the table
+    the pixel path reads. The alternative — the renderer reading the palette out
+    of SDRAM — was rejected because it puts a second reader on the part of the
+    design that took the most work to get right.
   - **The encoder pipeline register stays.** `tmds_channel` registers `q_m` with
     `mode`, `control_data` and `data_island_data`, costing one pixel of latency
     across every mode; `sim/tb_hdmi_encode.sv` with `tools/check_tmds.py` keeps
     that honest.
   - **GPL-3.0-only.** `hdmi/` and `pll/` derive from nestang (GPL-3.0).
 
-- **Next step:** the pack's palette, which is the last thing between this and a
-  real map, and needs a decision on how the loader supplies 256 entries — a
-  palette command on the link, a second pass over the pack's palette section,
-  or a region of SDRAM that the renderer reads. Then a level selector that
-  holds `step` inside `(0.5, 1]` across the pack's four levels, and the first
-  load of the full 28 MB pack.
+- **Next step:** the frame-start artifact. The renderer's row rotation assumes
+  the source row advances by at most one per output line, and at the frame wrap
+  the row jumps from the bottom of the level back to row 0; the first five
+  lines are drawn from stale or half-updated buffers before it settles. The
+  render testbench never crosses a frame boundary — it runs 48 lines from line 0
+  — so it cannot see this. The fix needs a testbench case that runs a full 750-
+  line frame and wraps, then the renderer told to flush its rotation when the
+  source row goes backwards. After that: a level selector that holds `step`
+  inside `(0.5, 1]` across the pack's four levels, and the first load of the
+  full 28 MB pack.
 
 - **Continuation records:** `docs/integration-blocker.md` (timing result, the
   fix, the exhausted levers, the encoder's open conformance question).

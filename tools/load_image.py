@@ -66,11 +66,11 @@ def crc(data):
     return zlib.crc32(data) & 0xFFFF_FFFF
 
 
-def frame(payload):
+def frame(payload, cmd=CMD_DATA):
     """One 0xAA frame around a chunk of payload."""
     n = len(payload) + 1
     assert 0 < n < 2048, n
-    return bytes([0xAA, (n >> 8) & 0xFF, n & 0xFF, CMD_DATA]) + payload
+    return bytes([0xAA, (n >> 8) & 0xFF, n & 0xFF, cmd]) + payload
 
 
 def framed(data):

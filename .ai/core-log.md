@@ -433,3 +433,40 @@ The pack's palette, which is the last thing between this and a real map: the ren
 - User Test: PASS
 
 ---
+
+## 13 COMMIT Unreleased 2026-10-26T11:01:16-07:00
+
+#### Coming From:
+
+Unreleased 43a0f4d
+
+#### Purpose:
+
+Give the pixel path the pack's own palette over the link, so the core can draw a real map instead of a grey ramp.
+
+#### Outcome:
+
+`maps_link_rx` now parses command `0x08` alongside the image load: a payload of `u16 start`, `u16 count`, `count` triples of RGB and a CRC-32 over the bytes before it, answered ACK or NAK `'P'`, with entries written into the palette as their third byte arrives. `tinymaps_top.sv` gives the fabric's power-on grey ramp and the link one write port to that table, the ramp having finished inside 512 clocks long before a host could send anything. `sim/tb_maps_palette.sv` covers a four-entry palette at a non-zero start, a full 256-entry table and a corrupted CRC refused with NAK `'P'`, with the CRCs computed by zlib rather than by the module's own function so the polynomial is checked rather than agreed with, and the synthesised netlist was simulated against the RTL for the same frame to rule out a synthesis difference. The host side is `tools/load_palette.py`, and `tools/maps_pack.py extract <pack> <level>` pulls a level's raster out for `tools/load_image.py`, so a real map is three commands. Bringing it up found a host defect rather than a hardware one: `load_image.py`'s `frame()` hardcoded command `0x07`, so `load_palette.py` was handing the palette to the image loader, which sat hunting for a `TML1` magic that never came and answered nothing, while the testbench passed because it sends the command byte itself; `frame()` now takes the command. On the Tang the palette was accepted for all 256 entries and the screen shows the Phoenix z12 level in its own colours, which the user reports looks good. That also exposed a new defect: measuring the capture against the level rendered with the renderer's own arithmetic, rows 0 to 4 of the frame are wrong, with 30 to 49 percent of their pixels off by more than 60 counts, while row 5 and below match their expected rows at correlation 0.70 to 0.91, and row 1 carries what row 0 should show, so the first lines are drawn from stale or half-updated row buffers at the frame wrap and the picture settles by the fifth line. The render testbench never crosses a frame boundary, running 48 lines from line 0, which is why this could not be caught before hardware. Build passes at placement seed 1 to `tinymaps.6fb7d4f7a2cc.bin` with `hclk` at 84.84 MHz against 74.25 and `clk` at 356.00 against 21.49, setup=0 and hold=0, and every testbench passes. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Fix the frame-start artifact: add a case to `sim/tb_maps_render.sv` that runs a full 750-line frame and wraps to line 0, which will fail today, then make the renderer flush its row rotation when the source row goes backwards instead of trusting the buffer tags. Then a level selector that holds `step` inside `(0.5, 1]` across the pack's four levels, and the first load of the full 28 MB pack, which at 190 kB/s is about two and a half minutes.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_palette.sv
+- tools/load_image.py
+- tools/load_palette.py
+- tools/maps_pack.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

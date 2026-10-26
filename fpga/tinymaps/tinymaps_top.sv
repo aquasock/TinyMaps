@@ -96,12 +96,21 @@ always_ff @(posedge hclk) begin
 end
 
 // ---------------------------------------------------------------- palette ---
-// A grey ramp until the loader can supply the pack's palette.
+// A grey ramp fills the table at power-on so the screen is not garbage before
+// anything is loaded; after that the link's palette command owns it.  Only one
+// writer is ever active: the ramp finishes inside 512 clocks, long before a
+// host can send a palette over a 2 Mbaud link.
 reg [8:0] pal_init = 9'd0;
-wire      pal_we    = ~pal_init[8];
-wire [7:0] pal_idx  = pal_init[7:0];
-wire [23:0] pal_data = {pal_init[7:0], pal_init[7:0], pal_init[7:0]};
 always @(posedge hclk) if (pal_init != 9'h1FF) pal_init <= pal_init + 9'd1;
+
+wire        ld_pal_we;
+wire [7:0]  ld_pal_idx;
+wire [23:0] ld_pal_data;
+
+wire        pal_we   = ld_pal_we | ~pal_init[8];
+wire [7:0]  pal_idx  = ld_pal_we ? ld_pal_idx  : pal_init[7:0];
+wire [23:0] pal_data = ld_pal_we ? ld_pal_data
+                                 : {pal_init[7:0], pal_init[7:0], pal_init[7:0]};
 // read and written on hclk only, for the same block RAM reason
 reg [23:0] pal [0:255];
 always @(posedge hclk) if (pal_we) pal[pal_idx] <= pal_data;
@@ -225,6 +234,7 @@ maps_link_rx u_loader (
     .tx_start(utx_start), .tx_data(utx_data), .tx_busy(utx_busy),
     .wr_req(ld_req), .wr_addr(ld_addr), .wr_lanes(ld_lanes),
     .wr_wdata(ld_wdata), .wr_ack(sd_ack),
+    .pal_we(ld_pal_we), .pal_idx(ld_pal_idx), .pal_data(ld_pal_data),
     .busy(), .images(), .bytes_written(), .last_nak(),
     .overflows(), .timeouts()
 );
