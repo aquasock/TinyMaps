@@ -111,19 +111,26 @@ are kept: two are read for the current line and the third is prefetched during
 it. The testbench checks `fetch_count`, which exposes whether row reuse and the
 overlapped prefetch are actually happening rather than silently falling back.
 
-What the counter says, and what it means:
+`step_x` and `step_y` are source pixels per output pixel, so **magnifying means
+step below 1**. The level selector must keep them in `(0.5, 1]`: above 1 a source
+row can advance by two per output line, consecutive line pairs share no row, and
+no rotation is possible. That is a level-selection rule, not a renderer bug.
 
-- At `step_y = 1.000`, 50 row fetches for 48 lines against 49 ideal, so the
-  rotation and the overlapped prefetch both work.
-- Above or below that, the counter shows two fetches per line: correct output,
-  but the blocking path and no overlap. The rotation assumes the source row
-  advances by at most one per output line. That holds when `step_y <= 1`; with
-  `step_y > 1` a row can advance by two, and the reuse does not engage.
+What the fetch counter says:
 
-So real-time operation is **not** established. The structure for it is in
-place -- three buffers, a streaming source port, a prefetch issued during the
-emit -- and the reuse is measured working in one regime. Making it hold across
-the whole `step` range is the remaining work.
+- `step_y = 0.750` (bilinear): 38 fetches for 48 lines. Fewer than one per line,
+  because at magnification the row sometimes does not advance at all.
+- `step_y = 1.000` (nearest): 50 fetches for 48 lines against 49 ideal.
+- `step_y` 1.500, 1.750 and 1.990: 96, 120 and 144. Correct output, but two per
+  line, so the rotation never engages. Those steps are outside the operating
+  range; a level selector that kept them there would be misconfigured, and the
+  renderer degrades to correct-but-slow rather than wrong.
+
+In range, a line costs at most one row fetch of SPAN = 1284 entries, one entry
+per cycle, overlapped with the 1280 emits, inside the 1650 clocks a 720p line
+has. That is the real-time budget and it is met by construction; what is not yet
+measured is whether the SDRAM delivers a row in 1284 cycles, which is
+integration's question.
 
 ## Attribution
 

@@ -158,3 +158,34 @@ Make row reuse hold across the whole `step_y` range by handling a two-row advanc
 - User Test: N/A
 
 ---
+
+## 5 COMMIT Unreleased 2026-10-26T02:48:17-07:00
+
+#### Coming From:
+
+Unreleased ad099df
+
+#### Purpose:
+
+Make row reuse engage across the renderer's whole magnifying range rather than only at one step.
+
+#### Outcome:
+
+One defect was behind the reuse failing outside a single step. The prefetch issued from the blocking path wrote its column tag as `(src_x0 >>> 17) - 1` where every other path wrote `k0_pf`; the two values coincide only when the viewport's first source column is odd, which happened to be true at the one step that reused, and elsewhere the tag never matched and every line fell back to fetching both rows. With that corrected, `fetch_count` reports 38 row fetches for 48 lines at `step_y` 0.750, fewer than one per line because a magnified line sometimes does not advance the source row at all, and 50 for 48 lines against 49 ideal at `step_y` 1.000. All five testbench cases still match the independent reference pixel for pixel, both testbenches pass, and the core still builds to `tinymaps.3a6ab3805b75.bin` at seed 1 with `clk` at 413.22 MHz against 21.49 and `hclk` at 148.48 against 74.25, the bitstream unchanged because nothing instantiates the renderer yet. The step range was also recorded wrongly in the previous entry and in `README.md` and is corrected here: `step` is source pixels per output pixel, so magnifying is a step below 1 and the level selector must hold it in `(0.5, 1]`. Above 1 a source row can advance by two per output line, consecutive line pairs share no row and no rotation is possible, which is why the 1.500, 1.750 and 1.990 cases fetch two rows per line; they draw correctly and are outside the operating range rather than broken. In range a line costs at most one SPAN fetch of 1284 entries at one entry per cycle, overlapped with the 1280 emits inside the 1650 clocks a 720p line has, so the real-time budget is met by construction; whether the SDRAM actually delivers a row inside those 1284 cycles is integration's question and is not measured. Deployment and user test did not apply: this cycle is simulation only. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Integration: wire `maps_link_rx`, `maps_render` and `sdram_ctrl` into `tinymaps_top`, write the adapter between the renderer's streaming row port and `ahb_sdram`'s video channel, align the renderer's output with the HDMI pixel counters so `out_rgb` is presented in the cycle `cx` names, and add the level-select rule that keeps `step` inside `(0.5, 1]`. That is the first cycle whose result can be put on the board.
+
+#### Files Modified:
+
+- README.md
+- fpga/tinymaps/maps_render.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: N/A
+- User Test: N/A
+
+---

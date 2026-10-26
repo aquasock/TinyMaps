@@ -330,7 +330,7 @@ always @(posedge clk or negedge resetn) begin
                 // line blocks again and row reuse never starts
                 if (!f_busy && !f_req) begin
                     f_req  <= 1'b1; f_buf <= 2'd2; f_row <= pf_row; f_cnt <= SPAN;
-                    f_col  <= (src_x0 >>> 17) - 32'd1;
+                    f_col  <= k0_pf;
                     f_base <= level_base + (pf_row * level_w) + {1'b0, k0_pf[22:0], 1'b0};
                 end
                 emit_x <= 16'd0; acc_x <= src_x0; rd_idx <= {AIDX{1'b0}};
