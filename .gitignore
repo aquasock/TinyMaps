@@ -8,3 +8,6 @@ work/
 __pycache__/
 *.pyc
 .venv/
+
+# open-flow build tree
+build/

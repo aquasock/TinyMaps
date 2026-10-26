@@ -8,8 +8,25 @@ and the apicula fork).
 
 ## State
 
-Pre-hardware. The pack builder works and its output is verified; no gateware has
-been written yet.
+Phase 0. The pack builder works and its output is verified, and the gateware
+skeleton builds through the open flow to a bitstream. Nothing has been deployed
+to the Tang.
+
+## Building
+
+    tools/build_maps_core_open.sh
+
+Needs oss-cad-suite, the nextpnr-himbaechel fork built against a regenerated
+GW5AST-138C database, and the apicula fork. The defaults are this machine's:
+
+- `NEXTPNR_BUILD=/home/vash/tools/nextpnr-mathieufro`
+- `APICULA_FORK=/run/media/vash/GIT/apicula-mathieufro`
+
+The flow refuses to pack a netlist with setup or hold violations. Artefacts
+land in `build/tinymaps/open-s<seed>/`, named after their own sha256 prefix.
+
+`fpga/tinymaps/tinymaps_top.sv` is a skeleton: clocks, 720p HDMI, and a colour
+bar pattern. No map data path exists yet.
 
 ## Map packs
 
@@ -64,4 +81,6 @@ here.
 
 ## Licence
 
-TBD.
+GPL-3.0-only. `fpga/tinymaps/hdmi/` and `pll/` derive from nestang by
+nand2mario (GPL-3.0), and the open-flow scripts derive from TinyTang's
+`tools/desktop_open`. The pack builder `tools/maps_pack.py` is MIT.

@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: MIT
+# Synthesise TinyMaps' core (top module `tinymaps_top`) for the Tang
+# Console 138K with yosys, on the way to nextpnr-himbaechel and gowin_pack.
+#
+# Run from a reconstructed design tree -- the working copy that TinyTang's own
+# tools/build_maps_core_open.sh --prepare-only produces -- with
+# synth-desktop.sh, which also stages the cell-library shim this script
+# expects in .open-shim/.
+#
+#   tools/maps_open/synth.sh /path/to/reconstructed/tree
+#
+# Why the slang front-end, and not plain read_verilog
+# ---------------------------------------------------
+# The design is SystemVerilog (the vendor project builds it with
+# `-verilog_std sysv2017`).  yosys's classic Verilog front-end rejects parts of
+# it that are legal SV -- `input reg` ports, and unpacked-array ports such as
+# iosys's `pmod0_io`.  `read_slang` accepts the sources unchanged.
+#
+# Why `-U SYNTHESIS`
+# ------------------
+# src/tinymaps/hdmi/serializer.sv is written as
+#     `ifdef SYNTHESIS  ... OSERDESE2 (Xilinx) ...
+#      `elsif GW_IDE    ... OSER10    (Gowin)  ...
+# so an *undefined* SYNTHESIS is what selects the Gowin path.  The front-end
+# defines it implicitly (`--no-synthesis-define` is the documented switch that
+# turns that off), hence the explicit `-U SYNTHESIS` to undo it.
+#
+# Why the cell libraries are passed as `-v` libfiles -- and why that ALONE is
+# not enough, and is silently wrong
+# -------------------------------------------------------------------------
+# The libraries must be visible (so the wrappers' rPLL/OSER10/ELVDS_OBUF/PLL/
+# CLKDIV/DPB instances have definitions), but they must not be design sources:
+# synth_gowin runs its own `read_verilog -lib` over the same library and would
+# abort with `Re-definition of module \LUT1!`.  So they are passed with `-v`.
+#
+# But `-v` is documented as "separate compilation units where modules are not
+# automatically instantiated" -- so on its own it makes the design elaborate
+# cleanly and drops every primitive the *design* instantiates.  The result is a
+# netlist that looks plausible and has no PLL, no CLKDIV and no OSER10 in it:
+# no clocks, no HDMI.  `--blackboxed-module` is what puts them back -- "the
+# instance will be imported as a black box".  Both flags are required.
+#
+# The list is injected by tools/maps_open/synth.sh, which derives it from the
+# design sources -- every cell-library module whose name begins a line in the
+# design.  Deriving it rather than listing it by hand means it cannot go stale,
+# which matters because a missing entry is not an error, it is a silently
+# dropped primitive.  (The derivation is a superset: it also picks up names that
+# are only local signals.  Blackboxing a module
+# the design does not instantiate is a no-op.)
+#
+# Why the shim:  cells_sim.v carries 44 `specify` blocks that slang's
+# elaboration rejects.  tools/maps_open/synth.sh writes a copy with the
+# `specify`/`endspecify` regions removed; timing checks are meaningless at
+# synthesis time anyway.
+#
+# On the `-undriven` red herring
+# -----------------------------
+# With the primitives blackboxed, the stock pass chain runs to completion and
+# the design comes out at several thousand cells.  Without the blackboxing, the same flow
+# collapses to 36 cells -- an empty shell -- and the discrepancy is entirely
+# explained by the dropped instances, not by any `opt` flag.  See
+# Tang-Build's OPEN-FLOW-DESKTOP.md and evidence/desktop-core-synth.txt.
+
+read_slang --std 1800-2017 -U SYNTHESIS \
+    -D GW_IDE \
+    --blackboxed-modules-INJECTED-BY-SYNTH-DESKTOP-SH \
+    --allow-use-before-declare --allow-lib-module-redef \
+    -v .open-shim/cells_sim_nospecify.v \
+    -v .open-shim/cells_xtra_gw5a.v \
+    -I src/tinymaps -I src/tinymaps/hdmi -I src/tinymaps/pll \
+    src/tinymaps/pll/gowin_pll_27.v \
+    src/tinymaps/pll/gowin_pll_hdmi.v \
+    src/tinymaps/pll/gowin_pll_nes.v \
+    src/tinymaps/tinymaps_top.sv \
+    src/tinymaps/hdmi/audio_clock_regeneration_packet.sv \
+    src/tinymaps/hdmi/audio_info_frame.sv \
+    src/tinymaps/hdmi/audio_sample_packet.sv \
+    src/tinymaps/hdmi/auxiliary_video_information_info_frame.sv \
+    src/tinymaps/hdmi/hdmi.sv \
+    src/tinymaps/hdmi/packet_assembler.sv \
+    src/tinymaps/hdmi/packet_picker.sv \
+    src/tinymaps/hdmi/serializer.sv \
+    src/tinymaps/hdmi/source_product_description_info_frame.sv \
+    src/tinymaps/hdmi/tmds_channel.sv
+
+# The stock flow, unmodified.  An earlier version of this script hand-rolled
+# synth_gowin's map_ffram pass chain to drop two `-undriven` flags, because with
+# them the design collapsed to 36 cells.  That was treating a symptom: the flags
+# were correct, and what they were entitled to delete was a netlist whose PLL
+# outputs had no driver -- because the PLL instances had been dropped by `-v`.
+# With every primitive blackboxed properly, their outputs have a driver, there
+# is nothing for `-undriven` to remove, and the pass chain runs as shipped.
+synth_gowin -top tinymaps_top -family gw5a
+
+write_json tinymaps-top-open.json
+stat -top tinymaps_top
