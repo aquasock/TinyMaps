@@ -6,7 +6,7 @@ add_file -type cst src/tinymaps/tinymaps.cst
 add_file -type sdc src/tinymaps/tinymaps.sdc
 foreach source {
     src/tinymaps/pll/gowin_pll_27.v src/tinymaps/pll/gowin_pll_hdmi.v src/tinymaps/pll/gowin_pll_nes.v
-    src/tinymaps/tinymaps_top.sv src/tinymaps/maps_link_rx.sv
+    src/tinymaps/tinymaps_top.sv src/tinymaps/maps_link_rx.sv src/tinymaps/maps_render.sv src/tinymaps/sdram_ctrl.sv
     src/tinymaps/hdmi/audio_clock_regeneration_packet.sv src/tinymaps/hdmi/audio_info_frame.sv
     src/tinymaps/hdmi/audio_sample_packet.sv src/tinymaps/hdmi/auxiliary_video_information_info_frame.sv
     src/tinymaps/hdmi/hdmi.sv src/tinymaps/hdmi/packet_assembler.sv src/tinymaps/hdmi/packet_picker.sv

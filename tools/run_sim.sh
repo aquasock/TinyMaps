@@ -27,4 +27,13 @@ for n in "${names[@]}"; do
     "$out/$n/V$n" 2>&1 | tee "$out/$n.run.log"
     grep -q "^RESULT: PASS" "$out/$n.run.log" || rc=1
 done
+
+# the render testbench makes no quality judgement of its own; its captured
+# pixels are checked here against an independent reference
+if [[ -z "$*" || " $* " == *" tb_maps_render "* ]]; then
+    if [[ -f build/sim/render_cases.txt ]]; then
+        echo "=== check_render ==="
+        python3 tools/check_render.py || rc=1
+    fi
+fi
 exit $rc

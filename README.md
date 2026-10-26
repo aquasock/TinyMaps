@@ -26,8 +26,10 @@ The flow refuses to pack a netlist with setup or hold violations. Artefacts
 land in `build/tinymaps/open-s<seed>/`, named after their own sha256 prefix.
 
 `fpga/tinymaps/tinymaps_top.sv` is a skeleton: clocks, 720p HDMI, and a colour
-bar pattern. The load receiver `maps_link_rx.sv` is written and proven in
-simulation but is not yet instantiated.
+bar pattern. The load receiver `maps_link_rx.sv` and the renderer
+`maps_render.sv` are written and proven in simulation, and `sdram_ctrl.sv` (vended
+from TinyNES's `ahb_sdram.sv`, renamed only) is the SDRAM engine. None of the
+three is instantiated yet.
 
 ## Simulation
 
@@ -94,6 +96,27 @@ Pack layout, little-endian:
 Origins are the EPSG:3857 metres of the level's pixel (0,0) centre. Coarser
 levels are tile-aligned supersets of L0's ground rectangle, so each carries its
 own origin.
+
+## Renderer
+
+`maps_render` draws one output line from one source row, with the viewport in
+the level's own pixel space (`src_x0`, `src_y0`, `step_x`, `step_y`, Q16.16).
+A row window is fetched into block RAM as 16-bit entries of two adjacent 8-bit
+pixels and each output pixel costs one block RAM read plus a 256-entry palette
+lookup. `tools/check_render.py` recomputes what the testbench ran from the
+parameters it wrote out and compares every pixel.
+
+Two things it does not do yet, both required before it can be called real time
+at 1280x720:
+
+- **Bilinear.** It resamples nearest only. Bilinear needs both source rows live
+  with a previous-entry register on each; with `step_x < 2` the entry index
+  advances by at most one per pixel, so one register per row is enough.
+- **Overlap.** It fetches a line's window and then emits the line, serially:
+  1282 fetch cycles plus 1280 emit cycles against 1650 pixel clocks. Real time
+  needs the next line's fetch to run while the current line emits, and a source
+  row reused when two output lines map to it, which brings the fetch to 1282
+  cycles and lets it overlap the 1280 emits.
 
 ## Attribution
 
