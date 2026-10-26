@@ -116,17 +116,21 @@ reg [23:0] pal [0:255];
 always @(posedge hclk) if (pal_we) pal[pal_idx] <= pal_data;
 
 // ----------------------------------------------------------------- renderer --
-// Viewport registers are constants for now; a level selector will own them.
-// They are set for a 768x768 eight-bit level at byte 0 of the SDRAM, which is
-// what tools/maps_test_image.py writes and what the pack's L3 level is: at 0.6
-// source pixels per output pixel the level's 768 columns fill the 1280-pixel
-// line exactly, and 0.6 is inside the (0.5, 1] the renderer needs.
-localparam signed [31:0] SRC_X0 = 32'd0;
-localparam signed [31:0] SRC_Y0 = 32'd0;
-localparam        [31:0] STEP   = 32'd39322;         // 0.600006 source px per output px
-localparam        [24:0] LEVEL_BASE = 25'd0;
-localparam        [15:0] LEVEL_W = 16'd768;
-localparam        [15:0] LEVEL_H = 16'd768;
+// The viewport is set over the link by command 0x0A and holds its power-on
+// values until then: a 768x768 eight-bit level at byte 0, which is what
+// tools/maps_test_image.py writes and what the pack's L3 level is, at 0.6
+// source pixels per output pixel so the level's 768 columns fill the line.
+reg  signed [31:0] SRC_X0     = 32'sd0;
+reg  signed [31:0] SRC_Y0     = 32'sd0;
+reg         [31:0] STEP       = 32'd39322;      // 0.600006 source px per output px
+reg         [24:0] LEVEL_BASE = 25'd0;
+reg         [15:0] LEVEL_W    = 16'd768;
+reg         [15:0] LEVEL_H    = 16'd768;
+wire               vp_we;
+wire        [24:0] vp_base;
+wire        [15:0] vp_w, vp_h;
+wire        [31:0] vp_step;
+wire signed [31:0] vp_x0, vp_y0;
 
 wire [10:0] cx;
 wire [9:0]  cy;
@@ -170,6 +174,18 @@ wire line_tick = tog_f[2] ^ tog_f[1];
 // use more than one line of head start while the store has two slots.  The
 // cause of lines 1 to 4 is not established; see docs/HANDOFF.md.
 wire [9:0] rc_cy = (cy >= OUT_H) ? 10'd0 : cy + 10'd1;
+
+// A viewport write is only visible to the renderer, and the range guard that
+// decides whether to accept it lives in the receiver, in front of this.
+always @(posedge hclk)
+    if (vp_we) begin
+        LEVEL_BASE <= vp_base;
+        LEVEL_W    <= vp_w;
+        LEVEL_H    <= vp_h;
+        STEP       <= vp_step;
+        SRC_X0     <= vp_x0;
+        SRC_Y0     <= vp_y0;
+    end
 
 maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(OUT_W/2 + 4)) u_render (
     .clk(hclk), .resetn(rstn_h),
@@ -248,6 +264,8 @@ maps_link_rx u_loader (
     .wr_req(ld_req), .wr_addr(ld_addr), .wr_lanes(ld_lanes),
     .wr_wdata(ld_wdata), .wr_ack(sd_ack),
     .pal_we(ld_pal_we), .pal_idx(ld_pal_idx), .pal_data(ld_pal_data),
+    .vp_we(vp_we), .vp_base(vp_base), .vp_w(vp_w), .vp_h(vp_h),
+    .vp_step(vp_step), .vp_x0(vp_x0), .vp_y0(vp_y0),
     .busy(), .images(), .bytes_written(), .last_nak(),
     .overflows(), .timeouts()
 );

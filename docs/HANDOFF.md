@@ -8,7 +8,9 @@
   border where it belongs. That is the first known image through the renderer,
   and it exercises the loader, both UARTs, the framing, the CRCs and the
   renderer's addressing at once. The palette now arrives over the link too, so
-  the screen shows the real Phoenix map in its own colours. Two things are open:
+  the screen shows the real Phoenix map in its own colours, all four pack levels
+  load over the link, and command `0x0A` switches between them without a
+  reload. Two things are open:
   the picture arrives lifted and clipped at the top because the sink treats the
   RGB as limited range, and the first five lines of each frame are drawn from
   stale rows (measured 2026-10-26: rows 0-4 wrong, rows 5 and below matching the
@@ -72,6 +74,11 @@
     modules carry the parameter with their defaults unchanged. Note that this
     did **not** change what a capture shows — see Unverified — so the
     declaration is the honest thing to send, not a fix for the capture.
+  - **The viewport arrives as command 0x0A, and its range guard is in the
+    fabric.** The host computes the viewport from the pack, but the core
+    refuses a step outside `(0.5, 1]` or a level that does not fit, and latches
+    nothing on a refusal. That range is the renderer's operating limit, so it
+    belongs where it cannot be bypassed.
   - **The palette arrives as command 0x08 on the link**, parsed by
     `maps_link_rx` alongside the image load, and written straight into the table
     the pixel path reads. The alternative — the renderer reading the palette out
@@ -98,9 +105,11 @@
   one, and its comparison (frame N against frame N+1) cannot catch a fault that
   repeats identically every frame. The right instrument is probably a per-line
   lateness counter read back over the link, rather than more simulation.
-- **Next step:** the level selector that holds `step` inside `(0.5, 1]` across
-  the pack's four levels, then the first load of the full 28 MB pack — or the
-  frame-start issue above, if it should come first.
+- **Next step:** the frame-start issue above, which now has a clean reproducer
+  in the field: an HDMI monitor shows it with no capture in the path. The
+  instrument to add is a per-line lateness counter read back over the link.
+  After that, pan and zoom as controls the core reads, rather than the host
+  re-sending a viewport.
 
 - **Continuation records:** `docs/integration-blocker.md` (timing result, the
   fix, the exhausted levers, the encoder's open conformance question).

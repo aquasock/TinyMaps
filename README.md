@@ -16,9 +16,11 @@ UART lands in the SDRAM and is drawn, which was checked on 2026-10-26 with a
 known test image rather than by eye. An image appears in grey until a palette is
 sent with it, and with the pack's palette the real map is on screen.
 
-**Known issue:** the first five lines of each frame are wrong -- line 0 used to
-carry the previous frame's last line and now carries itself, but lines 1 to 4 are
-still corrupt. The rest of the frame is correct. See `docs/HANDOFF.md`. The first hardware capture also showed the levels
+**Known issue:** the first lines of each frame are wrong -- line 0 used to carry
+the previous frame's last line and now carries itself, but lines 1 to 4 are still
+corrupt. The rest of the frame is correct. It was seen on the HDMI monitor as
+well as through a capture card, so it is the core and not the capture. See
+`docs/HANDOFF.md`. The first hardware capture also showed the levels
 lifted and clipped at the top -- the sink reading full-range RGB as limited
 range -- so the AVI InfoFrame now declares full range, and that build is on the
 board. The declaration does not change what a capture of the output shows: the
@@ -134,8 +136,26 @@ fills a grey ramp at power-on and the link owns the table afterwards.
     tools/maps_pack.py extract work/pack/phoenix-18km.tmpk 3
     tools/load_image.py work/test/level3.bin
 
+The viewport -- which level, and where in it -- arrives on command `0x0A`:
+
+    u32 level_base    u16 level_w, level_h    u32 step (Q16.16)
+    u32 src_x0, src_y0 (Q16.16)               u32 crc
+
+Answered ACK, or NAK `'V'` unless `0.5 < step <= 1` and the level fits in the
+SDRAM; nothing is latched on a refusal. The range is the renderer's operating
+limit and is enforced in the fabric, not trusted from the host.
+
+    tools/load_pack.py                          # palette and all four levels
+    tools/set_view.py --level 3                 # show one, at its own scale
+
+`load_pack.py` puts 28 MiB in the SDRAM in about two and a half minutes and
+`set_view.py` switches between the loaded levels with no reload, choosing a step
+of 1.0 or, for a level narrower than the screen, enough magnification to fill
+it -- 768 columns across 1280 is 0.6.
+
 Not implemented yet: the loader has no idle timeout (the `TIMEOUT` parameter is
-unused).
+unused), and panning and zooming still mean re-running `set_view.py` rather than
+a control the core reads itself.
 
 ## Map packs
 

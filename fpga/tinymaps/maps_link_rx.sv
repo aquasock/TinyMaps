@@ -35,6 +35,23 @@
 // sender re-sends it and every entry is written again, which is idempotent.
 // A palette for the whole table is 772 bytes, inside the frame limit.
 //
+// Command 0x0A sets the viewport, which is what selects a level.  Its payload,
+// all little-endian:
+//
+//     u32 level_base   byte address of the level's first pixel
+//     u16 level_w      level width  } one word, width low
+//     u16 level_h      level height
+//     u32 step         Q16.16 source pixels per output pixel
+//     u32 src_x0       Q16.16 level pixel shown at output x = 0
+//     u32 src_y0
+//     u32 crc          CRC-32 over the twenty bytes above, complemented
+//
+// Answered ACK, or NAK 'V' -- the CRC, the step outside (0.5, 1], the level
+// empty, or the level not inside the SDRAM.  Nothing is latched on a refusal.
+// The step range is the renderer's: above 1 a source row can advance by two per
+// output line and the row rotation cannot engage, and at or below 0.5 the next
+// finer level exists and should have been chosen instead.
+//
 // The write port is ahb_sdram's A25 side: req, address, lanes and data held
 // steady until ack pulses.  Bytes are assembled little-endian into a 64-bit
 // word and issued with all eight lanes; a short tail goes out with only the
@@ -74,6 +91,15 @@ module maps_link_rx #(
     output reg         pal_we,
     output reg  [7:0]  pal_idx,
     output reg  [23:0] pal_data,
+
+    // viewport, latched only when the command's own guard accepts it
+    output reg         vp_we,
+    output reg  [24:0] vp_base,
+    output reg  [15:0] vp_w,
+    output reg  [15:0] vp_h,
+    output reg  [31:0] vp_step,
+    output reg  signed [31:0] vp_x0,
+    output reg  signed [31:0] vp_y0,
 
     // status
     output reg         busy,
@@ -130,6 +156,37 @@ reg  [31:0] pal_crc;                // running CRC over start, count and entries
 reg  [31:0] pal_rx;                 // the CRC as it arrives
 reg  [31:0] palettes;
 
+// --------------------------------------------------------------- viewport ----
+// Command 0x0A.  Twenty bytes of body then its CRC, walked a byte at a time.
+localparam [1:0] V_IDLE = 2'd0, V_BODY = 2'd1, V_CRC = 2'd2;
+
+reg  [1:0]  vs;
+reg         vp_valid;
+reg  [7:0]  vp_byte;
+reg  [4:0]  vb;                     // byte within the payload
+reg  [31:0] vw;                     // the word being assembled
+reg  [31:0] v_base, v_wh, v_step, v_x0, v_y0;
+reg  [31:0] v_crc, v_rx;
+reg  [31:0] viewports;
+
+// The step guard, and the level's room in the SDRAM, checked before anything is
+// latched: 0.5 < step <= 1.0, a level that is not empty, and a level that fits.
+//
+// Registered in two stages, because computed in one it is a 16x16 multiply and a
+// 32-bit add in the same cone, and that alone took the pixel clock from 93 MHz
+// to 57.  The bytes settle four clocks before the decision, so the pipeline has
+// all the time it needs; the command is stop-and-wait and answered once.
+wire [31:0] v_size = {16'd0, v_wh[15:0]} * {16'd0, v_wh[31:16]};
+reg  [31:0] v_size_q;
+reg         vp_ok_q;
+
+always @(posedge clk) begin
+    v_size_q <= v_size;
+    vp_ok_q  <= (v_step > 32'h0000_8000) && (v_step <= 32'h0001_0000) &&
+                (v_wh[15:0] != 16'd0) && (v_wh[31:16] != 16'd0) &&
+                ({7'd0, v_base} + v_size_q <= 32'h0200_0000);
+end
+
 // ----------------------------------------------------------------- loader ----
 localparam [3:0] S_MAGIC = 4'd0, S_ADDR = 4'd1, S_LEN  = 4'd2, S_ICRC = 4'd3,
                  S_HCRC  = 4'd4, S_BLK  = 4'd5, S_BCRC = 4'd6, S_ICMP = 4'd7,
@@ -176,6 +233,12 @@ always @(posedge clk or negedge resetn) begin
         pal_b <= 2'd0; pal_r <= 8'd0; pal_g <= 8'd0;
         pal_crc <= 32'hFFFFFFFF; pal_rx <= 32'd0; palettes <= 32'd0;
         pal_we <= 1'b0; pal_idx <= 8'd0; pal_data <= 24'd0;
+        vs <= V_IDLE; vp_valid <= 1'b0; vp_byte <= 8'd0; vb <= 5'd0;
+        vw <= 32'd0; v_base <= 32'd0; v_wh <= 32'd0; v_step <= 32'd0;
+        v_x0 <= 32'd0; v_y0 <= 32'd0; v_crc <= 32'hFFFFFFFF; v_rx <= 32'd0;
+        viewports <= 32'd0; vp_we <= 1'b0;
+        vp_base <= 25'd0; vp_w <= 16'd768; vp_h <= 16'd768;
+        vp_step <= 32'd39322; vp_x0 <= 32'sd0; vp_y0 <= 32'sd0;
         st <= S_MAGIC; after_tx <= S_MAGIC;
         bidx <= 2'd0; cidx <= 2'd0; word <= 32'd0;
         img_addr <= 32'd0; img_len <= 32'd0; img_left <= 32'd0;
@@ -195,6 +258,8 @@ always @(posedge clk or negedge resetn) begin
         pl_valid <= 1'b0;
         pal_valid <= 1'b0;
         pal_we <= 1'b0;
+        vp_valid <= 1'b0;
+        vp_we <= 1'b0;
         tx_start <= 1'b0;
 
         // ---------------------------------------------------- frame parser --
@@ -210,6 +275,13 @@ always @(posedge clk or negedge resetn) begin
                             fcmd  <= rx_data;
                             fleft <= flen[11:0] - 12'd1;
                             fs    <= F_DATA;
+                            if (rx_data == 8'h0A) begin
+                                vs <= V_BODY;
+                                vb <= 5'd0;
+                                vw <= 32'd0;
+                                v_crc <= 32'hFFFFFFFF;
+                                v_rx <= 32'd0;
+                            end
                             if (rx_data == 8'h08) begin
                                 ps      <= P_START_LO;
                                 pal_ent <= 16'd0;
@@ -225,6 +297,9 @@ always @(posedge clk or negedge resetn) begin
                             end else if (fcmd == 8'h08) begin
                                 pal_valid <= 1'b1;
                                 pal_byte  <= rx_data;
+                            end else if (fcmd == 8'h0A) begin
+                                vp_valid <= 1'b1;
+                                vp_byte  <= rx_data;
                             end
                             if (fleft == 12'd1) fs <= F_IDLE;
                             else fleft <= fleft - 12'd1;
@@ -308,6 +383,60 @@ always @(posedge clk or negedge resetn) begin
                     end
                 end
                 default: ps <= P_IDLE;
+            endcase
+        end
+
+        // ------------------------------------------------------- viewport --
+        // Twenty bytes of body, then the CRC.  Nothing is latched until the CRC
+        // matches and the guard accepts it, so a refused command leaves the
+        // picture exactly as it was.
+        if (vp_valid) begin
+            case (vs)
+                V_BODY: begin
+                    vw    <= {vp_byte, vw[31:8]};        // little-endian
+                    v_crc <= crc32_byte(v_crc, vp_byte);
+                    if (vb[1:0] == 2'd3) begin
+                        case (vb[4:2])
+                            3'd0: v_base <= {vp_byte, vw[31:8]};
+                            3'd1: v_wh   <= {vp_byte, vw[31:8]};
+                            3'd2: v_step <= {vp_byte, vw[31:8]};
+                            3'd3: v_x0   <= {vp_byte, vw[31:8]};
+                            3'd4: v_y0   <= {vp_byte, vw[31:8]};
+                            default: ;
+                        endcase
+                    end
+                    vb <= vb + 5'd1;
+                    if (vb == 5'd19) vs <= V_CRC;
+                end
+                V_CRC: begin
+                    v_rx[8*vb[1:0] +: 8] <= vp_byte;
+                    vb <= vb + 5'd1;
+                    if (vb[1:0] == 2'd3) begin
+                        if (~v_crc != {vp_byte, v_rx[23:0]}) begin
+                            last_nak <= "C";
+                            tx_b0 <= NAK; tx_b1 <= "C"; tx_two <= 1'b1;
+                        end else if (vp_ok_q) begin
+                            vp_we   <= 1'b1;
+                            vp_base <= v_base[24:0];
+                            vp_w    <= v_wh[15:0];
+                            vp_h    <= v_wh[31:16];
+                            vp_step <= v_step;
+                            vp_x0   <= v_x0;
+                            vp_y0   <= v_y0;
+                            viewports <= viewports + 32'd1;
+                            tx_b0 <= ACK; tx_b1 <= 8'd0; tx_two <= 1'b0;
+                        end else begin
+                            last_nak <= "V";
+                            tx_b0 <= NAK; tx_b1 <= "V"; tx_two <= 1'b1;
+                        end
+                        tx_step  <= 2'd0;
+                        tx_i     <= 1'b0;
+                        after_tx <= S_MAGIC;
+                        st       <= S_TX;
+                        vs       <= V_IDLE;
+                    end
+                end
+                default: vs <= V_IDLE;
             endcase
         end
 

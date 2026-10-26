@@ -503,3 +503,39 @@ The frame-start issue needs an instrument rather than more simulation: a per-lin
 - User Test: PASS
 
 ---
+
+## 15 COMMIT Unreleased 2026-10-26T11:45:50-07:00
+
+#### Coming From:
+
+Unreleased 8aab508
+
+#### Purpose:
+
+Give the core a level selector, so the pack's four levels can be shown and switched between with the step the renderer needs.
+
+#### Outcome:
+
+`maps_link_rx` parses command `0x0A`, a whole viewport: the level's SDRAM byte address, its width and height, the Q16.16 step, and the Q16.16 origin, with a CRC-32 over the twenty bytes before it. The range guard is in the fabric: `0.5 < step <= 1`, a level that is not empty, and a level that fits in the SDRAM, with nothing latched on a refusal and NAK `'V'` as the answer, or NAK `'C'` for a bad CRC. That range is the renderer's real operating limit -- above 1 a source row can advance by two per line and the row rotation cannot engage -- so it is enforced where it cannot be bypassed rather than trusted from the host. `tinymaps_top.sv`'s viewport constants became registers driven by the command. Written first as one combinational expression, the guard's 16x16 multiply and 32-bit add took `hclk` from 93.65 MHz to 56.92 MHz and the flow refused to pack; registering the product and the verdict in two stages brought it to 96.27 MHz, and the guard still decides correctly because the payload's bytes settle four clocks before the CRC does. `sim/tb_maps_view.sv` sends four viewports and checks one acceptance and three refusals, including that nothing latches when a command is refused; the CRCs there are computed by zlib, and it caught two mistakes of mine in the test data rather than in the RTL -- a level at `0x01f00000` that actually does fit in 32 MiB, and word assembly that was one byte short. The host side is `tools/load_pack.py`, which sends the palette and any subset of levels, and `tools/set_view.py`, which computes the viewport from the pack's level table, choosing a step of 1.0 or, for a level narrower than the screen, enough magnification to fill it. On the Tang the whole 28 MiB pack loaded in two minutes thirty-three seconds with every block ACKed and every level's image CRC accepted, and selecting level 3 moved the picture to the centred view in one command with no reload, which the user reports as perfect on the HDMI monitor. Two things came out of that session. A `tangload` that printed `core loaded` left the core answering nothing on either command until it was programmed again, so the message is not proof that the design is running and the link should be probed after a load. And the user switched from the capture card to the HDMI monitor and saw the same corruption at the top of the frame, which settles that the frame-start issue is in the core rather than in the capture path; it is recorded as the next thing to fix, with a per-line lateness counter read back over the link as the instrument. Every testbench passes and the user passes this cycle. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The frame-start issue: an HDMI monitor shows it with no capture in the path, so it is the core. Add a per-line counter of how late the renderer is, read back over the link the way the palette and viewport commands read, which will separate a line drawn late from a line drawn from the wrong rows from a line drawn and then overwritten. After that, pan and zoom as controls the core reads itself rather than the host re-sending a viewport, and the renderer's real-time behaviour under pan, which has never been exercised.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_view.sv
+- tools/load_pack.py
+- tools/set_view.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---
