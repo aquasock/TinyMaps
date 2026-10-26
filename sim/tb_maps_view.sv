@@ -49,7 +49,7 @@ logic [24:0] got_base = 0;
 logic [15:0] got_w = 0, got_h = 0;
 logic [31:0] got_step = 0;
 integer      nlatched = 0;
-logic [7:0]  reply [0:7];
+logic [7:0]  reply [0:11];
 integer      nreply = 0;
 integer      i, errors;
 
@@ -118,20 +118,37 @@ initial begin
     end
     if (!errors) $display("viewport: accepted, 768x768 step 0.6 latched");
 
-    // --- step 0.4: the renderer cannot draw it, so it must not be latched
+    // --- step 0.4: below the old 0.5 boundary but still legal, because below
+    // 0.5 the step is magnification and the finest level has no finer neighbour
     pay[8]=8'h66; pay[9]=8'h66;                               // step 0.4
     pay[20]=8'hb1; pay[21]=8'h54; pay[22]=8'hcf; pay[23]=8'hf2; // its own crc
     send_view(24);
     settle(40);
-    if (reply[1] !== 8'h15 || reply[2] !== "V") begin
-        $display("  step 0.4: expected NAK 'V', got %02x %02x", reply[1], reply[2]);
+    if (reply[1] !== 8'h06) begin
+        $display("  step 0.4: expected ACK, got %02x", reply[1]);
         errors = errors + 1;
     end
-    if (nlatched !== 1) begin
-        $display("  step 0.4: latched anyway (%0d writes)", nlatched);
+    if (nlatched !== 2 || got_step !== 32'd26214) begin
+        $display("  step 0.4: latched step %0d after %0d writes, expected 26214 twice",
+                 got_step, nlatched);
         errors = errors + 1;
     end
-    if (errors === 0) $display("viewport: step 0.4 refused with NAK 'V'");
+    if (errors === 0) $display("viewport: step 0.4 accepted as magnification");
+
+    // --- step 0.2 is below the magnification floor
+    pay[8]=8'h33; pay[9]=8'h33;                               // step 0.2
+    pay[20]=8'hcb; pay[21]=8'h08; pay[22]=8'hfe; pay[23]=8'h5f;
+    send_view(24);
+    settle(40);
+    if (reply[2] !== 8'h15 || reply[3] !== "V") begin
+        $display("  step 0.2: expected NAK 'V', got %02x %02x", reply[2], reply[3]);
+        errors = errors + 1;
+    end
+    if (nlatched !== 2) begin
+        $display("  step 0.2: latched anyway (%0d writes)", nlatched);
+        errors = errors + 1;
+    end
+    if (!errors) $display("viewport: step 0.2 refused with NAK 'V'");
 
     // --- a level that would run past the end of the SDRAM
     pay[0]=8'h00; pay[1]=8'h00; pay[2]=8'hff; pay[3]=8'h01;   // base 0x01ff0000
@@ -139,11 +156,11 @@ initial begin
     pay[20]=8'h74; pay[21]=8'h25; pay[22]=8'h0a; pay[23]=8'h91; // its own crc
     send_view(24);
     settle(40);
-    if (reply[3] !== 8'h15 || reply[4] !== "V") begin
-        $display("  base past the end: expected NAK 'V', got %02x %02x", reply[3], reply[4]);
+    if (reply[4] !== 8'h15 || reply[5] !== "V") begin
+        $display("  base past the end: expected NAK 'V', got %02x %02x", reply[4], reply[5]);
         errors = errors + 1;
     end
-    if (nlatched !== 1) begin
+    if (nlatched !== 2) begin
         $display("  base past the end: latched anyway (%0d writes)", nlatched);
         errors = errors + 1;
     end
@@ -154,18 +171,18 @@ initial begin
     pay[20]=8'h8f; pay[21]=8'h64; pay[22]=8'h73; pay[23]=8'ha9;  // was 8e
     send_view(24);
     settle(40);
-    if (reply[5] !== 8'h15 || reply[6] !== "C") begin
-        $display("  bad crc: expected NAK 'C', got %02x %02x", reply[5], reply[6]);
+    if (reply[6] !== 8'h15 || reply[7] !== "C") begin
+        $display("  bad crc: expected NAK 'C', got %02x %02x", reply[6], reply[7]);
         errors = errors + 1;
     end
-    if (nlatched !== 1) begin
+    if (nlatched !== 2) begin
         $display("  bad crc: latched anyway (%0d writes)", nlatched);
         errors = errors + 1;
     end
     if (!errors) $display("viewport: bad CRC refused with NAK 'C'");
 
     if (errors) $display("RESULT: FAIL (%0d errors)", errors);
-    else        $display("RESULT: PASS (viewport: latched once, three refusals)");
+    else        $display("RESULT: PASS (viewport: accepted twice, refused twice)");
     $finish;
 end
 

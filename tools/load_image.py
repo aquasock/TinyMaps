@@ -95,34 +95,47 @@ def read_reply(port, timeout):
     raise RuntimeError("no answer from the loader")
 
 
-def open_pipe(port, quiet=False):
-    """Ask the board for the shell prompt, then hand the console to the core."""
-    time.sleep(0.2)
-    port.reset_input_buffer()
-    port.write(PROBE)
-    seen = b""
-    deadline = time.monotonic() + 1.5
-    while time.monotonic() < deadline:
-        seen += port.read(256)
-        m = PROBE_REPLY.search(seen)
-        if m:
-            if m.group(1) != b"1":
-                raise RuntimeError(f"the console is in state {m.group(1).decode()}, "
-                                   f"not at a shell prompt")
-            break
-    else:
-        raise RuntimeError("the console did not answer the status probe")
-    port.write(b"fpgapipe\r")
-    deadline = time.monotonic() + 2.0
-    seen = b""
-    while time.monotonic() < deadline:
-        seen += port.read(256)
-        if b"fpgapipe: open" in seen:
-            port.reset_input_buffer()
-            if not quiet:
-                print("console handed to the core (fpgapipe)")
-            return
-    raise RuntimeError(f"fpgapipe did not open: {seen[-200:]!r}")
+def open_pipe(port, quiet=False, attempts=4):
+    """Ask the board for the shell prompt, then hand the console to the core.
+
+    Retried, because the console is sometimes still finishing the previous
+    session when this opens: bytes sent then are typed into the shell, mangling
+    the command, and the pipe never opens.  Each attempt waits, discards
+    whatever the console is saying, and asks again.
+    """
+    last = ""
+    for attempt in range(attempts):
+        time.sleep(0.6 + 0.4 * attempt)
+        port.reset_input_buffer()
+        port.write(PROBE)
+        seen = b""
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            seen += port.read(256)
+            m = PROBE_REPLY.search(seen)
+            if m:
+                if m.group(1) != b"1":
+                    raise RuntimeError(f"the console is in state {m.group(1).decode()}, "
+                                       f"not at a shell prompt")
+                break
+        else:
+            last = "the console did not answer the status probe"
+            continue
+
+        port.write(b"fpgapipe\r")
+        deadline = time.monotonic() + 2.0
+        seen = b""
+        while time.monotonic() < deadline:
+            seen += port.read(256)
+            if b"fpgapipe: open" in seen:
+                port.reset_input_buffer()
+                if not quiet:
+                    print("console handed to the core (fpgapipe)")
+                return
+            if b"command not found" in seen:
+                break
+        last = f"fpgapipe did not open: {seen[-160:]!r}"
+    raise RuntimeError(last or "fpgapipe did not open")
 
 
 def load(port, image, addr, retries, quiet=False):

@@ -108,6 +108,17 @@
   emit that needed it, which put the next line into the blocking path too and
   cascaded for four lines -- the frame-top corruption.  The user reports pan and
   zoom work; the frame top has not been confirmed separately.
+- **Zoom range (this cycle):** the five-entry step table is gone.  A turn now
+  multiplies the step by about 1/1.078 -- nine steps to the octave instead of
+  five at 19% -- and a level crossing normalises to exactly 1.0 or 0.5 so the
+  rounding never accumulates.  The finest level keeps magnifying below 0.5,
+  where previously it stopped, down to a floor of 0.25; below 0.5 the step is
+  magnification and there is no finer level left to choose.  Total range went
+  from 16x to 32x, and the viewport guard's floor moved from 0.5 to 0.25 with
+  it.  The nine-turn test found a real bug on the way: the crossing was judged
+  against the step in force rather than the step about to be written, so a turn
+  could leave the step below 0.5 on a level that had a finer neighbour.  Built
+  and simulated, **not deployed** -- the Tang dropped off USB again.
 - **Instrument:** command `0x0C` and `tools/read_status.py` report the viewport
   the renderer is given.  It found both table defects.  Its own known bug: the
   top byte of a base above 16 MB reads wrong, so L3 reports `0xb7b703d8` for

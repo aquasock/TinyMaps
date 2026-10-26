@@ -61,15 +61,24 @@ module maps_nav #(
 
 localparam signed [15:0] NUDGE = 16'sd8;      // output pixels per pan step
 
-// quarter-octave steps: 0.5, 0.5946, 0.7071, 0.8409, 1.0
-function automatic [31:0] step_of(input [2:0] i);
-    case (i)
-        3'd0: step_of = 32'd32768;
-        3'd1: step_of = 32'd38970;
-        3'd2: step_of = 32'd46341;
-        3'd3: step_of = 32'd55109;
-        default: step_of = 32'd65536;
-    endcase
+// The zoom step is multiplicative rather than a table: a turn multiplies by
+// about 1/1.078, which is nine steps to the octave, and a level crossing
+// normalises to exactly 1.0 or 0.5 so the error never accumulates.  A table was
+// five steps of 19% and stopped at 0.5 because that is where the next level
+// begins -- but on the finest level there is no next level, so the zoom stopped
+// where it was most wanted.  Below 0.5 is just magnification: the renderer only
+// needs step <= 1, so the finest level is allowed down to 0.25, four output
+// pixels per source pixel.
+localparam [31:0] STEP_MAX   = 32'd65536;      // 1.0, one source px per output px
+localparam [31:0] STEP_LEVEL = 32'd32768;      // 0.5, where the next level begins
+localparam [31:0] STEP_FLOOR = 32'd16384;      // 0.25, the finest level's limit
+
+// 1.078 * step without a multiplier, and its inverse 0.926 * step
+function automatic [31:0] step_out(input [31:0] s);
+    step_out = s + (s >> 4) + (s >> 6);
+endfunction
+function automatic [31:0] step_in(input [31:0] s);
+    step_in = s - (s >> 4) - (s >> 6);
 endfunction
 
 function automatic [24:0] base_of(input [1:0] l);
@@ -97,9 +106,8 @@ function automatic [15:0] h_of(input [1:0] l);
     endcase
 endfunction
 
-// which level the base belongs to, and which table step is nearest
+// which level the base belongs to
 reg [1:0] lvl;
-reg [2:0] idx;
 
 always @* begin
     lvl = 2'd0;
@@ -107,12 +115,6 @@ always @* begin
     else if (lv_valid[1] && cur_base == lv_base1) lvl = 2'd1;
     else if (lv_valid[2] && cur_base == lv_base2) lvl = 2'd2;
     else if (lv_valid[3] && cur_base == lv_base3) lvl = 2'd3;
-
-    idx = 3'd0;
-    if      (cur_step > 32'd62460) idx = 3'd4;
-    else if (cur_step > 32'd50725) idx = 3'd3;
-    else if (cur_step > 32'd42655) idx = 3'd2;
-    else if (cur_step > 32'd35869) idx = 3'd1;
 end
 
 reg signed [15:0] acc_x, acc_y;
@@ -120,7 +122,6 @@ reg signed [31:0] nx0, ny0;
 reg        z_in, z_out;
 reg [4:0]  ct;
 reg [1:0]  c_level;
-reg [2:0]  c_idx;
 reg [1:0]  t_level;
 reg [31:0] t_step;
 reg        t_fine, t_coarse;
@@ -170,7 +171,7 @@ always @(posedge clk) begin
         acc_x <= 16'sd0; acc_y <= 16'sd0;
         nx0 <= 32'sd0; ny0 <= 32'sd0;
         z_in <= 1'b0; z_out <= 1'b0; ct <= 5'd0;
-        c_level <= 2'd0; c_idx <= 3'd0;
+        c_level <= 2'd0;
         t_level <= 2'd0; t_step <= 32'd65536; t_fine <= 1'b0; t_coarse <= 1'b0;
         ax0 <= 32'sd0; ay0 <= 32'sd0;
         o_base <= 25'd0; o_w <= 16'd0; o_h <= 16'd0;
@@ -189,7 +190,6 @@ always @(posedge clk) begin
                 ny0   <= cur_y0;
                 ct    <= 5'd16;
                 c_level <= lvl;
-                c_idx   <= idx;
                 ns <= N_PAN;
             end
 
@@ -218,18 +218,31 @@ always @(posedge clk) begin
 
             N_ZOOM: begin
                 t_fine <= 1'b0; t_coarse <= 1'b0; t_level <= c_level;
-                if (z_in && c_idx > 3'd0) begin
-                    t_step <= step_of(c_idx - 3'd1);
-                end else if (z_in && c_level > 2'd0 && lv_valid[c_level - 2'd1]) begin
-                    t_level <= c_level - 2'd1;
-                    t_step  <= step_of(3'd4);
-                    t_fine  <= 1'b1;
-                end else if (z_out && c_idx < 3'd4) begin
-                    t_step <= step_of(c_idx + 3'd1);
-                end else if (z_out && c_level < 2'd3 && lv_valid[c_level + 2'd1]) begin
-                    t_level <= c_level + 2'd1;
-                    t_step  <= step_of(3'd0);
-                    t_coarse <= 1'b1;
+                if (z_in) begin
+                    if (step_in(cur_step) < STEP_LEVEL) begin
+                        if (c_level > 2'd0 && lv_valid[c_level - 2'd1]) begin
+                            t_level <= c_level - 2'd1;
+                            t_step  <= STEP_MAX;
+                            t_fine  <= 1'b1;
+                        end else begin
+                            t_step <= (step_in(cur_step) < STEP_FLOOR) ? STEP_FLOOR
+                                                                       : step_in(cur_step);
+                        end
+                    end else begin
+                        t_step <= step_in(cur_step);
+                    end
+                end else if (z_out) begin
+                    if (step_out(cur_step) > STEP_MAX) begin
+                        if (c_level < 2'd3 && lv_valid[c_level + 2'd1]) begin
+                            t_level <= c_level + 2'd1;
+                            t_step  <= STEP_LEVEL;
+                            t_coarse <= 1'b1;
+                        end else begin
+                            t_step <= STEP_MAX;
+                        end
+                    end else begin
+                        t_step <= step_out(cur_step);
+                    end
                 end else begin
                     t_step <= cur_step;
                 end

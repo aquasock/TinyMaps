@@ -142,7 +142,7 @@ The viewport -- which level, and where in it -- arrives on command `0x0A`:
     u32 level_base    u16 level_w, level_h    u32 step (Q16.16)
     u32 src_x0, src_y0 (Q16.16)               u32 crc
 
-Answered ACK, or NAK `'V'` unless `0.5 < step <= 1` and the level fits in the
+Answered ACK, or NAK `'V'` unless `0.25 < step <= 1` and the level fits in the
 SDRAM; nothing is latched on a refusal. The range is the renderer's operating
 limit and is enforced in the fabric, not trusted from the host.
 
@@ -173,13 +173,19 @@ The board's Bluetooth mouse and keyboard drive the view, over the same link:
 the line engine's state.  A picture that freezes into one repeated row means a
 zero level width, and a readback is the only way to see that from outside.
 
-`maps_nav.sv` does the arithmetic.  Zooming walks five steps between 0.5 and 1.0
-a quarter of an octave apart, keeping the centre of the screen on the same
-ground point, and steps to the next level when the walk runs off either end.
-Because the pack's levels are a factor of two apart in metres per pixel, a
-crossing is a doubling or halving of the source coordinates and nothing else.
-Nothing in it multiplies two variables: the step table is constant and the
-scale factors are shifts and adds of the step.
+`maps_nav.sv` does the arithmetic.  Zooming is multiplicative: a turn multiplies
+the step by about 1/1.078, nine steps to the octave, keeping the centre of the
+screen on the same ground point.  When the step reaches 0.5 it crosses to the
+next finer level and normalises to exactly 1.0, so the rounding never
+accumulates; the coarsest level tops out at 1.0.  Because the pack's levels are
+a factor of two apart in metres per pixel, a crossing is a doubling or halving
+of the source coordinates and nothing else.
+
+Below 0.5 the step is magnification rather than a finer level, and only the
+finest level has no finer neighbour -- so that is where it is allowed, down to
+0.25, four output pixels per source pixel.  The whole range is 32x: 16x across
+the four levels and 2x more at the close end.  Nothing in it multiplies two
+variables: the zoom factors are shifts and adds of the step.
 
 A host viewport command replaces the view and clears any unapplied pan.  Both
 writers go to a shadow, and the shadow is swapped in at the top of the vertical

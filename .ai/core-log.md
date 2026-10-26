@@ -613,3 +613,39 @@ Confirm the top of the frame on hardware now that the refetch no longer races, a
 - User Test: PASS
 
 ---
+
+
+## 18 COMMIT Unreleased 2026-10-26T14:30:00-07:00
+
+#### Coming From:
+
+Unreleased a86d4b8
+
+#### Purpose:
+
+Make the zoom go somewhere, after the hardware showed the arithmetic working but the range too small to feel like zooming.
+
+#### Outcome:
+
+Two wheel turns on the Tang settled the question with the readback rather than by eye: from a step of 39322 at level 3, one turn gave 32768 with the origin moving to (64, 204), exactly where holding the centre of the screen puts it, and the next turn crossed to level 2 at a step of 1.0 with the source coordinates doubled and the horizontal origin clamped to zero because that level is a screen wide at 1.0. So the navigation was correct and the problem was range: a factor of two per level in five steps of 19 percent, 16 times from end to end, which reads as detail changing rather than as zooming. The step table is gone. A turn now multiplies the step by about 1/1.078 -- nine steps to the octave instead of five at 19 percent -- using shifts and adds rather than a multiply, and a level crossing normalises the step to exactly 1.0 or 0.5 so the rounding never accumulates across a session. The other half of the change is that the finest level no longer stops at 0.5. That boundary exists because at or below it the next finer level is the right one to show, but the finest level has no finer neighbour, so the zoom stopped exactly where it was most wanted; it now continues to 0.25, four output pixels per source pixel, and the viewport guard's floor moved from 0.5 to 0.25 to match. The range is now 32 times. The new nine-turn test found a real defect while it was being written: the level crossing was judged against the step in force rather than the step about to be written, so a turn could leave the step below 0.5 on a level that did have a finer neighbour, which is the one state the renderer's rotation cannot serve. The test also caught two stale expectations of mine -- that all nine turns would reduce the step when the ninth is the crossing, and that a step of 0.4 would be refused when the guard had just been moved to admit it. The core builds at placement seed 1 to `tinymaps.109ea3a8822d.bin` with `hclk` at 91.27 MHz against 74.25, setup=0 and hold=0, and all ten testbench and checker results pass. Deployment did not run: the Tang came off USB again before the bitstream could be written, the same instability that has interrupted every long transfer since the capture card was introduced. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy `tinymaps.109ea3a8822d.bin` when the link is stable and try the wheel: each detent should now move about eight percent rather than nineteen, nine turns should cover an octave and land exactly on the next level, and on the finest level the zoom should keep going past 0.5 down to 0.25 instead of stopping. The glitch pixels at the top of the frame remain open and are the older of the two outstanding faults; the readback's wrong top byte for bases above 16 MB is the third.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/maps_nav.sv
+- sim/tb_maps_nav.sv
+- sim/tb_maps_view.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

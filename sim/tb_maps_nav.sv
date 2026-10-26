@@ -124,14 +124,16 @@ initial begin
     act(128, 0, 0);
     want(cur_x0 == 0, "a level no wider than the screen does not pan");
 
-    // --- zoom in from the middle of the table: one step, centre preserved
+    // --- zoom in: about eight percent, with the centre held
     reset_pan;
     cur_base = lv_base0; cur_w = 4608; cur_h = 4608;
-    cur_x0 = 655360; cur_y0 = 327680; cur_step = 32'd46341;   // 0.7071
-    centre_before = cur_x0 + 640 * 46341;
+    cur_x0 = 655360; cur_y0 = 327680; cur_step = 32'd50000;
+    x_before = cur_x0;
+    centre_before = cur_x0 + 640 * 50000;
     act(0, 0, -1);
-    want(cur_step == 32'd38970, "zoom in takes the next step down");
-    centre_after = cur_x0 + 640 * 38970;
+    want(cur_step < 50000 && cur_step > 50000 - 50000/8,
+         "one turn zooms in by under an eighth");
+    centre_after = cur_x0 + 640 * cur_step;
     want(centre_after - centre_before < 640 && centre_before - centre_after < 640,
          "zoom in keeps the centre within a pixel");
 
@@ -154,12 +156,17 @@ initial begin
     want(cur_step == 32'd32768, "crossing coarser lands on a step of 0.5");
     want(cur_x0 == 65536 && cur_y0 == 65536, "crossing coarser halves the origin");
 
-    // --- at the finest level and the smallest step there is nowhere to go
+    // --- the finest level keeps zooming in past 0.5, down to 0.25
     reset_pan;
     cur_base = lv_base0; cur_w = 4608; cur_h = 4608;
     cur_step = 32'd32768; cur_x0 = 65536; cur_y0 = 65536;
     act(0, 0, -1);
-    want(cur_step == 32'd32768 && cur_x0 == 65536, "zoom stops at the finest");
+    want(cur_step < 32'd32768 && cur_base == lv_base0,
+         "the finest level zooms past 0.5 instead of stopping there");
+    cur_step = 32'd17000; cur_x0 = 65536; cur_y0 = 65536;
+    reset_pan;
+    act(0, 0, -1);
+    want(cur_step == 32'd16384, "the finest level stops at 0.25");
 
     // --- and at the coarsest, the other way
     reset_pan;
@@ -167,6 +174,33 @@ initial begin
     cur_step = 32'd65536; cur_x0 = 0; cur_y0 = 0;
     act(0, 0, 1);
     want(cur_step == 32'd65536, "zoom stops at the coarsest");
+
+    // --- nine turns from a level's coarsest step: one octave, then a crossing.
+    // The step is multiplicative, so the check is that it strictly falls, stays
+    // inside the level's range, and normalises to exactly 1.0 on the crossing.
+    reset_pan;
+    cur_base = lv_base2; cur_w = 1280; cur_h = 1280;
+    cur_step = 32'd65536; cur_x0 = 0; cur_y0 = 0;
+    begin
+        integer k2;
+        integer prev;
+        for (k2 = 0; k2 < 8; k2 = k2 + 1) begin
+            prev = cur_step;
+            act(0, 0, -1);
+            if (cur_step >= prev) begin
+                $display("  turn %0d did not zoom in: %0d -> %0d", k2 + 1, prev, cur_step);
+                errors = errors + 1;
+            end
+        end
+        // the ninth crosses: the step jumps back up to 1.0 on the finer level
+        act(0, 0, -1);
+        if (cur_base !== lv_base1 || cur_step !== 32'd65536) begin
+            $display("  nine turns ended at level base %h step %0d, expected the next level at 1.0",
+                     cur_base, cur_step);
+            errors = errors + 1;
+        end else
+            $display("  nine turns: one octave of smaller steps, then L2 -> L1 at 1.0");
+    end
 
     if (errors) $display("RESULT: FAIL (%0d errors)", errors);
     else        $display("RESULT: PASS (pan, clamps, zoom steps and both crossings)");

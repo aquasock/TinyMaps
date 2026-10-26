@@ -46,11 +46,12 @@
 //     u32 src_y0
 //     u32 crc          CRC-32 over the twenty bytes above, complemented
 //
-// Answered ACK, or NAK 'V' -- the CRC, the step outside (0.5, 1], the level
+// Answered ACK, or NAK 'V' -- the CRC, the step outside (0.25, 1], the level
 // empty, or the level not inside the SDRAM.  Nothing is latched on a refusal.
-// The step range is the renderer's: above 1 a source row can advance by two per
-// output line and the row rotation cannot engage, and at or below 0.5 the next
-// finer level exists and should have been chosen instead.
+// The ceiling is the renderer's: above 1 a source row can advance by two per
+// output line and the row rotation cannot engage.  The floor is the finest
+// level's magnification limit -- below 0.5 no finer level exists to choose, so
+// the step is the zoom.
 //
 // Command 0x0B loads the level table the zoom reads, up to four entries:
 //
@@ -235,7 +236,7 @@ reg         vp_ok_q;
 
 always @(posedge clk) begin
     v_size_q <= v_size;
-    vp_ok_q  <= (v_step > 32'h0000_8000) && (v_step <= 32'h0001_0000) &&
+    vp_ok_q  <= (v_step > 32'h0000_4000) && (v_step <= 32'h0001_0000) &&
                 (v_wh[15:0] != 16'd0) && (v_wh[31:16] != 16'd0) &&
                 ({7'd0, v_base} + v_size_q <= 32'h0200_0000);
 end
