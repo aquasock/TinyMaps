@@ -402,3 +402,34 @@ Deploy `tinymaps.a54a650eae81.bin` when the board is connected, reload `work/tes
 - User Test: NOT RUN
 
 ---
+
+## 12 COMMIT Unreleased 2026-10-26T10:40:57-07:00
+
+#### Coming From:
+
+Unreleased 2c88e61
+
+#### Purpose:
+
+Put the full-range AVI build on the board and measure whether the picture's lifted levels changed.
+
+#### Outcome:
+
+`tinymaps.a54a650eae81.bin` was uploaded with `tangput` at 4,412,908 bytes and programmed with `tangload`, which reported `ID=0001081b` and `Load SRAM`, and `tools/load_image.py` then wrote the 589,824-byte test image in 3.1 s at 190 kB/s with every block accepted on its first attempt and the image CRC good. The user reports the picture looks good and passes it. The measurement does not corroborate the change, and that is the finding worth recording: a capture of this build is pixel-identical to a capture of the previous one apart from 48 pixels in an eight-by-eight patch at the top of the frame, which is a cursor, so the levels still arrive lifted, with index 236 reading 255 and everything above about 235 clipped exactly as before. The declaration is therefore in the packet and correct -- `tb_avi_range` shows byte 3 as `1000_0100` -- but it does not change what this capture path produces, which means either the sink ignores the quantization field or the capture device applies its own limited-to-full expansion whatever the source declares. The second is more likely: the data islands are unconditional in `hdmi.sv`, whose `num_packets_alongside` comes from the blanking budget rather than from the picker, so the AVI frame is being sent. What follows is that a capture of this board is a reliable measure of geometry and of relative brightness but not of absolute levels, and that the palette should be designed against the display rather than against a capture; the user's own judgement of the display is the only evidence available for the top of the range. Deployment and user test both ran and both passed; no build ran in this cycle because the image deployed is the artefact entry 11 built. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The pack's palette, which is the last thing between this and a real map: the renderer's palette is initialised by the top and has no second writer, so supplying 256 entries needs a decision -- a palette command on the link that `maps_link_rx` does not parse today, a second pass over the pack's palette section, or a region of SDRAM the renderer reads instead of a fabric table. Then a level selector that holds `step` inside `(0.5, 1]` across the pack's four levels, and the first load of the full 28 MB pack, which at 190 kB/s is about two and a half minutes and has never been attempted.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

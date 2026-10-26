@@ -16,8 +16,12 @@ UART lands in the SDRAM and is drawn, which was checked on 2026-10-26 with a
 known test image rather than by eye. The palette is still a grey ramp in fabric,
 so an image appears in grey. The first hardware capture also showed the levels
 lifted and clipped at the top -- the sink reading full-range RGB as limited
-range -- so the AVI InfoFrame now declares full range; that change is built and
-simulated but has not been back on the board. `docs/HANDOFF.md` holds the state, the decisions
+range -- so the AVI InfoFrame now declares full range, and that build is on the
+board. The declaration does not change what a capture of the output shows: the
+levels still arrive lifted, because the capture path applies its own
+limited-range expansion whatever the source declares. The display is the
+authority for how the picture looks, not the capture, and a capture is only a
+reliable measure of geometry and relative brightness. `docs/HANDOFF.md` holds the state, the decisions
 and the next action; `docs/integration-blocker.md` holds the timing
 measurements, the fix and the levers that were ruled out.
 
