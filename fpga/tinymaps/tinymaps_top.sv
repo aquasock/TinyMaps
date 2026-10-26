@@ -156,7 +156,20 @@ reg [2:0] tog_f;
 always @(posedge fclk) tog_f <= {tog_f[1:0], line_tog_h};
 wire line_tick = tog_f[2] ^ tog_f[1];
 
-wire [9:0] rc_cy = (cy == 10'd749) ? 10'd0 : cy + 10'd1;
+// The renderer is asked for line 0 for the whole of the vertical blanking, not
+// just the last raster line.  At the wrap it cannot reuse the rows it holds --
+// the source row jumps from the bottom of the level back to zero -- so it has to
+// fetch both rows before it can emit: about 700 clocks a row at SPAN 644, plus
+// 1280 to emit, against the 1650 a line has.  Given one line it falls behind and
+// the line store is read before it is written, which is what put the previous
+// frame's last line at the top of the picture; the blanking is 30 lines and more
+// than covers the one discontinuity a frame has.
+// Open issue, measured on hardware: line 0 comes out right with the blanking to
+// draw it in, but lines 1 to 4 are still wrong.  Asking for line 1 in the
+// second blanking line as well made line 0 wrong again, so the renderer cannot
+// use more than one line of head start while the store has two slots.  The
+// cause of lines 1 to 4 is not established; see docs/HANDOFF.md.
+wire [9:0] rc_cy = (cy >= OUT_H) ? 10'd0 : cy + 10'd1;
 
 maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(OUT_W/2 + 4)) u_render (
     .clk(hclk), .resetn(rstn_h),

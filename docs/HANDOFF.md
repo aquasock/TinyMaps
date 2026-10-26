@@ -83,16 +83,24 @@
     that honest.
   - **GPL-3.0-only.** `hdmi/` and `pll/` derive from nestang (GPL-3.0).
 
-- **Next step:** the frame-start artifact. The renderer's row rotation assumes
-  the source row advances by at most one per output line, and at the frame wrap
-  the row jumps from the bottom of the level back to row 0; the first five
-  lines are drawn from stale or half-updated buffers before it settles. The
-  render testbench never crosses a frame boundary — it runs 48 lines from line 0
-  — so it cannot see this. The fix needs a testbench case that runs a full 750-
-  line frame and wraps, then the renderer told to flush its rotation when the
-  source row goes backwards. After that: a level selector that holds `step`
-  inside `(0.5, 1]` across the pack's four levels, and the first load of the
-  full 28 MB pack.
+- **Open issue — the top of every frame.** Line 0 was being drawn only on the
+  last raster line, which gave the renderer one line period (1650 clocks) for a
+  discontinuity it needs about 2680 for: two row fetches at roughly 700 clocks
+  plus 1280 emits. It now gets the whole vertical blanking, and line 0 measures
+  correct (correlation 0.936 against the expected line, 5% of pixels off,
+  against 42% before). **Lines 1 to 4 are still wrong** — 37 to 52 percent of
+  their pixels off, matching no line of the expected frame — and asking for line
+  1 during the blanking as well made line 0 wrong again, so the renderer cannot
+  use more than one line of head start while the line store has two slots. What
+  corrupts lines 1 to 4 is not established. A testbench has been written and
+  abandoned once for this: a top-like model with the line store, the pixel read
+  and a video-channel fetch model reproduces a frame-start failure but not this
+  one, and its comparison (frame N against frame N+1) cannot catch a fault that
+  repeats identically every frame. The right instrument is probably a per-line
+  lateness counter read back over the link, rather than more simulation.
+- **Next step:** the level selector that holds `step` inside `(0.5, 1]` across
+  the pack's four levels, then the first load of the full 28 MB pack — or the
+  frame-start issue above, if it should come first.
 
 - **Continuation records:** `docs/integration-blocker.md` (timing result, the
   fix, the exhausted levers, the encoder's open conformance question).

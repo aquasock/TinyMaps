@@ -13,8 +13,12 @@ timing** -- `hclk` at 83.06 MHz against the 74.25 MHz a 720p line needs, at
 placement seed 1 -- so the flow packs a bitstream, and that bitstream runs on
 the Tang. The pack loader works on hardware too: an image sent over the BL616's
 UART lands in the SDRAM and is drawn, which was checked on 2026-10-26 with a
-known test image rather than by eye. The palette is still a grey ramp in fabric,
-so an image appears in grey unless a palette is sent with it. The first hardware capture also showed the levels
+known test image rather than by eye. An image appears in grey until a palette is
+sent with it, and with the pack's palette the real map is on screen.
+
+**Known issue:** the first five lines of each frame are wrong -- line 0 used to
+carry the previous frame's last line and now carries itself, but lines 1 to 4 are
+still corrupt. The rest of the frame is correct. See `docs/HANDOFF.md`. The first hardware capture also showed the levels
 lifted and clipped at the top -- the sink reading full-range RGB as limited
 range -- so the AVI InfoFrame now declares full range, and that build is on the
 board. The declaration does not change what a capture of the output shows: the

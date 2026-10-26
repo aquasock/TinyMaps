@@ -470,3 +470,36 @@ Fix the frame-start artifact: add a case to `sim/tb_maps_render.sv` that runs a 
 - User Test: PASS
 
 ---
+
+## 14 COMMIT Unreleased 2026-10-26T11:19:41-07:00
+
+#### Coming From:
+
+Unreleased ed8ebb3
+
+#### Purpose:
+
+Fix the top rows of each frame, which the previous cycle's capture showed were being read before the renderer had written them.
+
+#### Outcome:
+
+Measuring the capture against the level rendered with the renderer's own arithmetic localised the fault: raster line 0 carried the previous frame's last line (correlation 0.809 with the expected line 718), line 1 carried line 0, and lines 2 to 4 matched no line of the frame at all, while line 5 and below matched their own lines at correlation 0.70 to 0.91. The renderer was being asked for line 0 only on the last raster line of the frame, which left it one line period of 1650 clocks for a line it cannot draw from the rows it holds, because the source row jumps from the bottom of the level back to zero: two row fetches at roughly 700 clocks each plus 1280 emits is about 2680. It now receives `rc_cy` of 0 for the whole vertical blanking, in `tinymaps_top.sv`, which is 30 lines and covers the one discontinuity a frame has. Measured on the next capture, line 0 became correct: correlation 0.936 with the expected line and 5.2 percent of pixels off, against 41.9 percent before. Lines 1 to 4 did not improve, at 37 to 52 percent off and matching no line, and a second build that also asked for line 1 during the blanking made line 0 wrong again (correlation 0.809 with line 718), so one line of head start is all the two-slot line store allows; that build was reverted and the revert reproduced the previous bitstream hash exactly. A frame-start testbench was written, `sim/tb_maps_frame.sv`, with the line store and pixel read from the top and a video-channel fetch model, and it was abandoned rather than committed: it reproduces a frame-start failure, but its comparison of one frame against the next cannot catch a fault that repeats identically every frame, which is what this one does, and building a correct reference for it is more work than the issue has earned so far. A wrap case was added to `sim/tb_maps_render.sv` and does pass, but with 64-pixel lines it has no timing pressure and cannot see this. The build is `tinymaps.e0c154b34546.bin` at placement seed 1 with `hclk` at 93.65 MHz against 74.25, setup=0 and hold=0, deployed with the L3 level and the pack palette, and the user reports the picture still glitches at the top and asks for it to be logged and left for now. The issue is written into `README.md` and `docs/HANDOFF.md` with the measurements and with what is ruled out: the head start, the store's depth, and one abandoned model. Every testbench passes. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The frame-start issue needs an instrument rather than more simulation: a per-line counter of how late the renderer is, read back over the link the way the palette command reads, would show whether lines 1 to 4 are drawn late, drawn from the wrong rows, or drawn and then overwritten. Otherwise the level selector that holds `step` inside `(0.5, 1]` across the pack's four levels, and the first load of the full 28 MB pack, which at 190 kB/s is about two and a half minutes.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_render.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

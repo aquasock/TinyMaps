@@ -17,7 +17,7 @@ localparam integer LVL_H = 192;
 localparam integer LEVEL_BASE = 25'h100000;
 localparam integer MEM_BYTES = 4*1024*1024;
 localparam integer LINE_CLOCKS = 900;      // comfortably over fetch + emit
-localparam integer CASES = 5;
+localparam integer CASES = 6;
 
 reg clk = 0, resetn = 0;
 always #5 clk = ~clk;
@@ -82,6 +82,7 @@ maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H)) dut (
 integer fout, fcase;
 integer fx, fy, n, c;
 integer pix_count;
+reg     dump = 1;        // off while a case fills the row rotation without judging it
 
 task run_line(input integer y);
     integer t;
@@ -90,7 +91,7 @@ task run_line(input integer y);
         for (t = 0; t < LINE_CLOCKS; t = t + 1) begin
             cx = t[10:0];
             @(posedge clk);
-            if (out_valid) begin
+            if (out_valid && dump) begin
                 $fwrite(fout, "%c%c%c", out_rgb[23:16], out_rgb[15:8], out_rgb[7:0]);
                 pix_count = pix_count + 1;
             end
@@ -139,11 +140,23 @@ initial begin
             2: set_case(2, 32'd1343488, 32'd540672,  32'h00018000, 32'h00018000, 1); // 20.5,8.25 1.500 bilinear
             3: set_case(3, 32'd163840,  32'd98304,   32'h0001C000, 32'h0001C000, 1); //  2.5,1.5  1.750 bilinear
             4: set_case(4, 32'd589824,  32'd327680,  32'h0000C000, 32'h0000C000, 1); //  9.0,5.0  0.750 bilinear (magnifying)
+            // the frame wrap: a whole pass first, so the row buffers hold the
+            // bottom of the window, then line 0 again as the next frame draws
+            // it.  Only the second pass is captured and judged.
+            5: set_case(5, 32'd589824,  32'd327680,  32'h0000C000, 32'h0000C000, 1);
         endcase
         repeat (8) @(posedge clk);
         resetn = 1;
         repeat (8) @(posedge clk);
-        for (fy = 0; fy < OUT_H + 2; fy = fy + 1) run_line(fy);
+        if (c == 5) begin
+            dump = 0;
+            for (fy = 0; fy < OUT_H; fy = fy + 1) run_line(fy);
+            dump = 1;
+            for (fy = 0; fy < OUT_H; fy = fy + 1) run_line(fy);
+            dump = 0;
+        end else begin
+            for (fy = 0; fy < OUT_H + 2; fy = fy + 1) run_line(fy);
+        end
         // two rows at the discontinuity, then ideally one per line in steady
         // state; anything near 2*OUT_H means the prefetch never landed in time
         $display("case %0d: %0d row fetches for %0d lines (steady state would be %0d)",
