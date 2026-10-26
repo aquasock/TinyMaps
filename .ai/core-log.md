@@ -577,3 +577,39 @@ Deploy `tinymaps.eaea3e4132d1.bin` when the Tang is back, load the pack, send th
 - User Test: NOT RUN
 
 ---
+
+
+## 17 COMMIT Unreleased 2026-10-26T14:06:39-07:00
+
+#### Coming From:
+
+Unreleased 40c02b2
+
+#### Purpose:
+
+Make pan and zoom usable, after the first hardware attempt turned the picture into a vertical smear.
+
+#### Outcome:
+
+The smear was diagnosed from a capture in which all 720 rows were identical, one distinct row and zero row-to-row difference: the renderer was drawing a single source row for every line, which is what a level width of zero does, because every row address becomes `base + row*0`. Two defects in the level table were behind it, and neither was in the navigation. The table's outputs were declared as registers and never assigned, so the core held zeros, and a pan was the first thing to read them; and once connected, the sixteen-bit width and height were being taken from a word that had only shifted twice, which put the width in the height. Both are fixed, the table's fields are now assembled from named byte registers, and the pan is exact by measurement rather than by eye: thirty-two mouse counts move the origin 19.2 source pixels at a step of 0.6. Two composition changes came with it and both are load-bearing. Viewport writes, from the host or from the navigation, now go to a shadow that is swapped in at the top of the vertical blanking, because a viewport change costs the renderer a blocking refetch of two rows, about 2680 clocks against the 1650 a line has, and applying one mid-frame tore the picture. And the renderer's blocking path now waits for its third row before it draws: the priming fetch was issued and left running while the line drew, and a row fetch of about 1340 clocks against a 1280-clock emit finished roughly sixty clocks too late, so the next line blocked too and the cascade ran for four lines, which is the corruption at the top of every frame. The instrument that found all of this is new: command `0x0C` answers with twenty-one raw bytes, the level address, size, step, origin and the line engine's state, and `tools/read_status.py` prints them. It is the first time a fault in this project was located by reading the core's own state rather than by inferring it from a picture, and it found both table defects in two reads. It has a known bug of its own, recorded: the top byte of a level base above 16 MB reads wrong, so level 3 reports `0xb7b703d8` where the truth is `0x01b703d8`, and the other fields are correct. Two host-side findings came from the same session: `fpgapipe` fails if it is opened within a few seconds of the previous session closing, and the BL616 suppresses the desk layer's input frames while a host owns the pipe, so a mouse test run during a pack load never reaches the core. The core builds at placement seed 1 to `tinymaps.949683069dfd.bin` with `hclk` at 86.20 MHz against 74.25, setup=0 and hold=0, every testbench passes, and after the final load the user reports that panning and zoom work. The top of the frame has not been confirmed separately, though the same fix addresses the mechanism that caused it. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Confirm the top of the frame on hardware now that the refetch no longer races, and fix the status command's top byte so the readback can be trusted for level 3. Then the natural next cycle is the feel of panning and zooming rather than its correctness: the view updates once per frame because a viewport change costs a refetch, so smoothing it means either fetching only the entries a pan newly needs or giving the renderer a wider line store.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/maps_render.sv
+- fpga/tinymaps/tinymaps_top.sv
+- tools/read_status.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

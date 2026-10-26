@@ -90,7 +90,29 @@
     that honest.
   - **GPL-3.0-only.** `hdmi/` and `pll/` derive from nestang (GPL-3.0).
 
-- **Open issue — the top of every frame.** Line 0 was being drawn only on the
+- **Fixed this cycle — the smear and the frame top.** Both had one cause, and
+  neither was in the navigation.  A capture of the smear had all 720 rows
+  identical: the renderer was drawing one source row repeatedly, which happens
+  when the level width is zero, because every row address becomes
+  `base + row*0`.  The level table's outputs had been declared and never
+  assigned, so the core held width 0, and a pan was the first thing to read the
+  table.  Once connected, the 16-bit width and height were taken from a word
+  that had only shifted twice, so the width landed in the height.  Both are
+  fixed and the pan is exact by measurement: 32 mouse counts move the origin
+  19.2 source pixels at step 0.6.
+- **Also changed, and load-bearing:** viewport writes go to a shadow swapped in
+  at the top of the vertical blanking, and the renderer's blocking path now
+  waits for its third row before drawing.  A viewport change costs two row
+  fetches, about 2680 clocks against the 1650 a line has, so a mid-frame change
+  tore the picture; and the priming fetch finished about 60 clocks after the
+  emit that needed it, which put the next line into the blocking path too and
+  cascaded for four lines -- the frame-top corruption.  The user reports pan and
+  zoom work; the frame top has not been confirmed separately.
+- **Instrument:** command `0x0C` and `tools/read_status.py` report the viewport
+  the renderer is given.  It found both table defects.  Its own known bug: the
+  top byte of a base above 16 MB reads wrong, so L3 reports `0xb7b703d8` for
+  `0x01b703d8`; the other fields are right.
+- **Open issue — the top of every frame (older note, kept for the record).** Line 0 was being drawn only on the
   last raster line, which gave the renderer one line period (1650 clocks) for a
   discontinuity it needs about 2680 for: two row fetches at roughly 700 clocks
   plus 1280 emits. It now gets the whole vertical blanking, and line 0 measures

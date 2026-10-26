@@ -16,11 +16,12 @@ UART lands in the SDRAM and is drawn, which was checked on 2026-10-26 with a
 known test image rather than by eye. An image appears in grey until a palette is
 sent with it, and with the pack's palette the real map is on screen.
 
-**Known issue:** the first lines of each frame are wrong -- line 0 used to carry
-the previous frame's last line and now carries itself, but lines 1 to 4 are still
-corrupt. The rest of the frame is correct. It was seen on the HDMI monitor as
-well as through a capture card, so it is the core and not the capture. See
-`docs/HANDOFF.md`. The first hardware capture also showed the levels
+Panning and zooming work, and `tools/read_status.py` reports the viewport the
+renderer is being given -- which is how the level-table defects that froze the
+picture into one repeated row were found. The top few lines of a frame were
+corrupt for a while; the cause was a refetch that landed after the line needing
+it, and the fix is in, though it has not been confirmed on hardware separately
+from panning. The first hardware capture also showed the levels
 lifted and clipped at the top -- the sink reading full-range RGB as limited
 range -- so the AVI InfoFrame now declares full range, and that build is on the
 board. The declaration does not change what a capture of the output shows: the
@@ -167,6 +168,11 @@ The board's Bluetooth mouse and keyboard drive the view, over the same link:
 - command `0x0B` loads the level table, `u8 count` then per level
   `{u32 base, u16 w, u16 h}` and a CRC.
 
+`tools/read_status.py` asks the core what the renderer is being told: command
+`0x0C` returns twenty-one raw bytes, the level address, size, step, origin and
+the line engine's state.  A picture that freezes into one repeated row means a
+zero level width, and a readback is the only way to see that from outside.
+
 `maps_nav.sv` does the arithmetic.  Zooming walks five steps between 0.5 and 1.0
 a quarter of an octave apart, keeping the centre of the screen on the same
 ground point, and steps to the next level when the walk runs off either end.
@@ -175,7 +181,11 @@ crossing is a doubling or halving of the source coordinates and nothing else.
 Nothing in it multiplies two variables: the step table is constant and the
 scale factors are shifts and adds of the step.
 
-A host viewport command replaces the view and clears any unapplied pan.
+A host viewport command replaces the view and clears any unapplied pan.  Both
+writers go to a shadow, and the shadow is swapped in at the top of the vertical
+blanking: a viewport change costs the renderer a blocking refetch of two rows,
+about 2680 clocks against the 1650 a line has, so applying one mid-frame tore the
+picture.
 
 Not implemented yet: the loader has no idle timeout (the `TIMEOUT` parameter is
 unused).

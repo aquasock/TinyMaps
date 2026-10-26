@@ -63,6 +63,13 @@
 // report and not a stream.  Neither is answered: the desk task sends them at a
 // poll rate and a reply per frame would be traffic nobody reads.
 //
+// Command 0x0C asks what the renderer is actually being told, and is answered
+// with twenty-one raw bytes rather than a frame, because the pipe a host uses
+// is raw: base (4), width (2), height (2), step (4), origin x and y (4 each),
+// and the renderer's state (1).  It exists because a picture that freezes into
+// one repeated row says the renderer is drawing the same source line every
+// time, and which of those six numbers caused it cannot be seen from outside.
+//
 // The write port is ahb_sdram's A25 side: req, address, lanes and data held
 // steady until ack pulses.  Bytes are assembled little-endian into a 64-bit
 // word and issued with all eight lanes; a short tail goes out with only the
@@ -114,15 +121,22 @@ module maps_link_rx #(
 
     // level table for the zoom, in SDRAM order, coarsest last
     output reg  [3:0]  lv_valid,
-    output reg  [24:0] lv_base0, lv_base1, lv_base2, lv_base3,
-    output reg  [15:0] lv_w0, lv_w1, lv_w2, lv_w3,
-    output reg  [15:0] lv_h0, lv_h1, lv_h2, lv_h3,
+    output wire [24:0] lv_base0, lv_base1, lv_base2, lv_base3,
+    output wire [15:0] lv_w0, lv_w1, lv_w2, lv_w3,
+    output wire [15:0] lv_h0, lv_h1, lv_h2, lv_h3,
 
     // one navigation event: output pixels to pan, and a zoom step
     output reg         nav_ev,
     output reg  signed [15:0] nav_px,
     output reg  signed [15:0] nav_py,
     output reg  signed [1:0]  nav_zoom,
+
+    // what the renderer is being told, for command 0x0C
+    input  wire [24:0] st_base,
+    input  wire [15:0] st_w, st_h,
+    input  wire [31:0] st_step,
+    input  wire signed [31:0] st_x0, st_y0,
+    input  wire [2:0]  st_rstate,
 
     // status
     output reg         busy,
@@ -179,6 +193,22 @@ reg  [31:0] pal_crc;                // running CRC over start, count and entries
 reg  [31:0] pal_rx;                 // the CRC as it arrives
 reg  [31:0] palettes;
 
+// ---------------------------------------------------------------- status ----
+reg        ss_active;
+reg [4:0]  ss_i;
+reg [4:0]  ss_wait;
+
+wire [7:0] ss_byte =
+    (ss_i <  5'd4)  ? st_base[8*ss_i[1:0] +: 8] :
+    (ss_i == 5'd4)  ? st_w[7:0] :
+    (ss_i == 5'd5)  ? st_w[15:8] :
+    (ss_i == 5'd6)  ? st_h[7:0] :
+    (ss_i == 5'd7)  ? st_h[15:8] :
+    (ss_i <  5'd12) ? st_step[8*(ss_i - 5'd8) +: 8] :
+    (ss_i <  5'd16) ? st_x0[8*(ss_i - 5'd12) +: 8] :
+    (ss_i <  5'd20) ? st_y0[8*(ss_i - 5'd16) +: 8] :
+                      {5'd0, st_rstate};
+
 // --------------------------------------------------------------- viewport ----
 // Command 0x0A.  Twenty bytes of body then its CRC, walked a byte at a time.
 localparam [1:0] V_IDLE = 2'd0, V_BODY = 2'd1, V_CRC = 2'd2;
@@ -219,7 +249,7 @@ reg         lv_en;
 reg  [7:0]  lv_byte;
 reg  [7:0]  lv_cnt;                 // bytes seen
 reg  [2:0]  lv_n;                   // levels the sender promised, 0 means 4
-reg  [31:0] lw;                     // the word being assembled
+reg  [7:0]  rb0, rb1, rb2, rb3, rb4, rb5, rb6, rb7;
 reg  [31:0] l_crc, l_rx;
 reg  [24:0] lvb0, lvb1, lvb2, lvb3;
 reg  [15:0] lvw0, lvw1, lvw2, lvw3;
@@ -240,6 +270,15 @@ integer     k;
 reg  [7:0]  in_b0, in_b1, in_b2, in_b3, in_b4, in_b5, in_b6;
 reg  signed [15:0] key_px, key_py;
 reg  signed [1:0]  key_zoom;
+
+// The table the zoom crosses with.  These were declared as outputs and never
+// assigned, which left the table zero: a width of zero makes every row address
+// the same address, so the renderer drew one line and repeated it down the
+// frame, and a pan -- which reads the table -- produced exactly that.
+assign lv_base0 = lvb0; assign lv_base1 = lvb1;
+assign lv_base2 = lvb2; assign lv_base3 = lvb3;
+assign lv_w0 = lvw0; assign lv_w1 = lvw1; assign lv_w2 = lvw2; assign lv_w3 = lvw3;
+assign lv_h0 = lvh0; assign lv_h1 = lvh1; assign lv_h2 = lvh2; assign lv_h3 = lvh3;
 
 // Which level record the byte belongs to, and which byte within it.
 wire [1:0]  lrec = (lv_cnt - 8'd1) >> 3;
@@ -300,7 +339,7 @@ always @(posedge clk or negedge resetn) begin
         vp_base <= 25'd0; vp_w <= 16'd768; vp_h <= 16'd768;
         vp_step <= 32'd39322; vp_x0 <= 32'sd0; vp_y0 <= 32'sd0;
         ls <= L_IDLE; lv_en <= 1'b0; lv_byte <= 8'd0; lv_cnt <= 8'd0;
-        lv_n <= 3'd0; lw <= 32'd0; l_crc <= 32'hFFFFFFFF; l_rx <= 32'd0;
+        lv_n <= 3'd0; l_crc <= 32'hFFFFFFFF; l_rx <= 32'd0;
         lv_valid <= 4'd0;
         lvb0 <= 25'd0; lvb1 <= 25'd0; lvb2 <= 25'd0; lvb3 <= 25'd0;
         lvw0 <= 16'd0; lvw1 <= 16'd0; lvw2 <= 16'd0; lvw3 <= 16'd0;
@@ -310,6 +349,7 @@ always @(posedge clk or negedge resetn) begin
         in_b4 <= 8'd0; in_b5 <= 8'd0; in_b6 <= 8'd0;
         key_px <= 16'sd0; key_py <= 16'sd0; key_zoom <= 2'sd0;
         nav_ev <= 1'b0; nav_px <= 16'sd0; nav_py <= 16'sd0; nav_zoom <= 2'sd0;
+        ss_active <= 1'b0; ss_i <= 5'd0; ss_wait <= 5'd0;
         st <= S_MAGIC; after_tx <= S_MAGIC;
         bidx <= 2'd0; cidx <= 2'd0; word <= 32'd0;
         img_addr <= 32'd0; img_len <= 32'd0; img_left <= 32'd0;
@@ -352,10 +392,14 @@ always @(posedge clk or negedge resetn) begin
                             if (rx_data == 8'h0B) begin
                                 ls <= L_BODY;
                                 lv_cnt <= 8'd0;
-                                lw <= 32'd0;
+
                                 l_crc <= 32'hFFFFFFFF;
                                 l_rx <= 32'd0;
                                 lv_valid <= 4'd0;
+                            end
+                            if (rx_data == 8'h0C) begin
+                                ss_active <= 1'b1;
+                                ss_i      <= 5'd0;
                             end
                             if (rx_data == 8'h16) is <= I_MOUSE;
                             if (rx_data == 8'h17) is <= I_KEY;
@@ -477,6 +521,24 @@ always @(posedge clk or negedge resetn) begin
             endcase
         end
 
+        // --------------------------------------------------------- status ----
+        // One byte at a time through the same sender the replies use: hold
+        // tx_start until the transmitter takes it, then wait for it to finish.
+        if (ss_active) begin
+            if (ss_wait == 5'd0) begin
+                tx_data  <= ss_byte;
+                tx_start <= 1'b1;
+                ss_wait  <= 5'd1;
+            end else if (ss_wait == 5'd1) begin
+                tx_start <= 1'b0;
+                ss_wait  <= 5'd2;
+            end else if (!tx_busy) begin
+                ss_wait <= 5'd0;
+                ss_i    <= ss_i + 5'd1;
+                if (ss_i == 5'd20) ss_active <= 1'b0;
+            end
+        end
+
         // ---------------------------------------------------- level table --
         if (lv_en) begin
             case (ls)
@@ -486,27 +548,26 @@ always @(posedge clk or negedge resetn) begin
                         lv_n  <= lv_byte[2:0];
                         lv_cnt <= 8'd1;
                     end else begin
-                        lw <= {lv_byte, lw[31:8]};
-                        if (((lv_cnt - 8'd1) & 8'd7) == 8'd3) begin
+                        // Hold the record's eight bytes, then take the fields
+                        // out by name.  Reading sixteen-bit halves out of a
+                        // word that had only shifted twice is what put the
+                        // width in the height and a 1 into the table.
+                        case ((lv_cnt - 8'd1) & 8'd7)
+                            3'd0: rb0 <= lv_byte;
+                            3'd1: rb1 <= lv_byte;
+                            3'd2: rb2 <= lv_byte;
+                            3'd3: rb3 <= lv_byte;
+                            3'd4: rb4 <= lv_byte;
+                            3'd5: rb5 <= lv_byte;
+                            3'd6: rb6 <= lv_byte;
+                            default: rb7 <= lv_byte;
+                        endcase
+                        if (((lv_cnt - 8'd1) & 8'd7) == 8'd7) begin
                             case (lrec)
-                                2'd0: lvb0 <= {lv_byte, lw[31:8]};
-                                2'd1: lvb1 <= {lv_byte, lw[31:8]};
-                                2'd2: lvb2 <= {lv_byte, lw[31:8]};
-                                default: lvb3 <= {lv_byte, lw[31:8]};
-                            endcase
-                        end else if (((lv_cnt - 8'd1) & 8'd7) == 8'd5) begin
-                            case (lrec)
-                                2'd0: lvw0 <= lw[31:16];
-                                2'd1: lvw1 <= lw[31:16];
-                                2'd2: lvw2 <= lw[31:16];
-                                default: lvw3 <= lw[31:16];
-                            endcase
-                        end else if (((lv_cnt - 8'd1) & 8'd7) == 8'd7) begin
-                            case (lrec)
-                                2'd0: lvh0 <= {lv_byte, lw[31:8]};
-                                2'd1: lvh1 <= {lv_byte, lw[31:8]};
-                                2'd2: lvh2 <= {lv_byte, lw[31:8]};
-                                default: lvh3 <= {lv_byte, lw[31:8]};
+                                2'd0: begin lvb0 <= {rb3, rb2, rb1, rb0}; lvw0 <= {rb5, rb4}; lvh0 <= {lv_byte, rb6}; end
+                                2'd1: begin lvb1 <= {rb3, rb2, rb1, rb0}; lvw1 <= {rb5, rb4}; lvh1 <= {lv_byte, rb6}; end
+                                2'd2: begin lvb2 <= {rb3, rb2, rb1, rb0}; lvw2 <= {rb5, rb4}; lvh2 <= {lv_byte, rb6}; end
+                                default: begin lvb3 <= {rb3, rb2, rb1, rb0}; lvw3 <= {rb5, rb4}; lvh3 <= {lv_byte, rb6}; end
                             endcase
                             lv_valid <= lv_valid | (4'd1 << lrec);
                         end

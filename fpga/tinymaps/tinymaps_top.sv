@@ -151,7 +151,7 @@ wire [23:0] render_rgb;
 wire [7:0]  render_idx;
 wire [11:0] render_x;
 wire        render_valid;
-wire [15:0] fetch_count;
+wire [2:0]  render_state;
 
 wire        vrd_rd_start;
 wire [24:0] vrd_rd_addr;
@@ -187,30 +187,61 @@ wire line_tick = tog_f[2] ^ tog_f[1];
 // cause of lines 1 to 4 is not established; see docs/HANDOFF.md.
 wire [9:0] rc_cy = (cy >= OUT_H) ? 10'd0 : cy + 10'd1;
 
-// Two writers: the host's viewport command, which replaces everything, and the
-// navigation events, which move what is already there.  The host wins if both
-// land together, and it also clears the navigation's unapplied pan remainder.
+// A viewport change costs the renderer a blocking refetch of both rows -- about
+// 2680 clocks against the 1650 a line has -- so applying one mid-frame tears the
+// picture: the row buffers hold a window fetched for another origin and the line
+// store is read before it is written.  That is what a single mouse report did.
+//
+// So the writers do not touch the live viewport.  They write a shadow, and the
+// shadow is swapped in at the top of the vertical blanking, where the renderer
+// starts line 0 with thirty lines in hand.  Several events in one frame fold
+// into one swap, and the navigation reads the shadow, so its own steps chain.
+reg  [24:0] sh_base = 25'd0;
+reg  [15:0] sh_w    = 16'd768;
+reg  [15:0] sh_h    = 16'd768;
+reg  [31:0] sh_step = 32'd39322;
+reg  signed [31:0] sh_x0 = 32'sd0;
+reg  signed [31:0] sh_y0 = 32'sd0;
+reg         vp_pending = 1'b1;
+
 always @(posedge hclk)
     if (vp_we) begin
-        LEVEL_BASE <= vp_base;
-        LEVEL_W    <= vp_w;
-        LEVEL_H    <= vp_h;
-        STEP       <= vp_step;
-        SRC_X0     <= vp_x0;
-        SRC_Y0     <= vp_y0;
+        sh_base <= vp_base;
+        sh_w    <= vp_w;
+        sh_h    <= vp_h;
+        sh_step <= vp_step;
+        sh_x0   <= vp_x0;
+        sh_y0   <= vp_y0;
+        vp_pending <= 1'b1;
     end else if (nav_we) begin
-        LEVEL_BASE <= nav_base;
-        LEVEL_W    <= nav_w;
-        LEVEL_H    <= nav_h;
-        STEP       <= nav_step;
-        SRC_X0     <= nav_x0;
-        SRC_Y0     <= nav_y0;
+        sh_base <= nav_base;
+        sh_w    <= nav_w;
+        sh_h    <= nav_h;
+        sh_step <= nav_step;
+        sh_x0   <= nav_x0;
+        sh_y0   <= nav_y0;
+        vp_pending <= 1'b1;
+    end
+
+wire at_blank = (cy == OUT_H);
+reg  at_blank_d = 1'b0;
+always @(posedge hclk) at_blank_d <= at_blank;
+
+always @(posedge hclk)
+    if (at_blank && !at_blank_d && vp_pending) begin
+        LEVEL_BASE <= sh_base;
+        LEVEL_W    <= sh_w;
+        LEVEL_H    <= sh_h;
+        STEP       <= sh_step;
+        SRC_X0     <= sh_x0;
+        SRC_Y0     <= sh_y0;
+        vp_pending <= 1'b0;
     end
 
 maps_nav #(.OUT_W(OUT_W), .OUT_H(OUT_H)) u_nav (
     .clk(hclk), .resetn(rstn_h),
-    .cur_base(LEVEL_BASE), .cur_w(LEVEL_W), .cur_h(LEVEL_H),
-    .cur_step(STEP), .cur_x0(SRC_X0), .cur_y0(SRC_Y0),
+    .cur_base(sh_base), .cur_w(sh_w), .cur_h(sh_h),
+    .cur_step(sh_step), .cur_x0(sh_x0), .cur_y0(sh_y0),
     .lv_valid(lv_valid),
     .lv_base0(lv_base0), .lv_base1(lv_base1),
     .lv_base2(lv_base2), .lv_base3(lv_base3),
@@ -231,7 +262,8 @@ maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(OUT_W/2 + 4)) u_render (
     .rd_data(vrd_rd_data), .rd_valid(vrd_rd_valid),
     .pal_we(pal_we), .pal_idx(pal_idx), .pal_data(pal_data),
     .cx(cx), .cy(rc_cy),
-    .fetch_count(fetch_count),
+    .fetch_count(),
+    .dbg_state(render_state),
     .out_x(render_x), .out_rgb(render_rgb), .out_idx(render_idx),
     .out_valid(render_valid)
 );
@@ -301,6 +333,8 @@ maps_link_rx u_loader (
     .pal_we(ld_pal_we), .pal_idx(ld_pal_idx), .pal_data(ld_pal_data),
     .vp_we(vp_we), .vp_base(vp_base), .vp_w(vp_w), .vp_h(vp_h),
     .vp_step(vp_step), .vp_x0(vp_x0), .vp_y0(vp_y0),
+    .st_base(LEVEL_BASE), .st_w(LEVEL_W), .st_h(LEVEL_H), .st_step(STEP),
+    .st_x0(SRC_X0), .st_y0(SRC_Y0), .st_rstate(render_state),
     .lv_valid(lv_valid),
     .lv_base0(lv_base0), .lv_base1(lv_base1),
     .lv_base2(lv_base2), .lv_base3(lv_base3),

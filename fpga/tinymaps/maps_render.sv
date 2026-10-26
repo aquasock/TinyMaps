@@ -65,6 +65,7 @@ module maps_render #(
     // diagnostic: complete row fetches performed, so a test can tell row reuse
     // and overlapped prefetch from a blocking refetch every line
     output reg  [15:0] fetch_count,
+    output wire [2:0]  dbg_state,      // the line engine's state, for the link's status command
 
     output reg  [11:0] out_x,
     output reg  [23:0] out_rgb,      // palette-resolved, for the testbench
@@ -326,17 +327,28 @@ always @(posedge clk or negedge resetn) begin
                 block_step <= 3'd4;
             end
             3'd4: if (f_ack) begin block_step <= 3'd5; end
-            default: begin
-                // prime the third buffer for the *next* line, otherwise every
-                // line blocks again and row reuse never starts
-                if (!f_busy && !f_req) begin
-                    f_req  <= 1'b1; f_buf <= 2'd2; f_row <= pf_row; f_cnt <= SPAN;
-                    f_col  <= k0_pf;
-                    f_base <= level_base + (pf_row * level_w) + {1'b0, k0_pf[22:0], 1'b0};
-                end
-                emit_x <= 16'd0; acc_x <= src_x0; rd_idx <= {AIDX{1'b0}};
-                st <= S_EMIT;
+            // Prime the third buffer for the next line and *wait* for it.  It
+            // was issued and left running while this line drew, which loses the
+            // race: a row fetch takes about 1340 clocks and the emit takes
+            // 1280, so the next line arrived with the buffer still empty, took
+            // the blocking path itself, and the cascade ran for four lines.
+            // That is the corruption at the top of every frame and after every
+            // pan; paying for the fetch here costs one row on the single line
+            // that had to block anyway.
+            3'd5: if (!f_busy && !f_req) begin
+                f_req  <= 1'b1; f_buf <= 2'd2; f_row <= pf_row; f_cnt <= SPAN;
+                f_col  <= k0_pf;
+                f_base <= level_base + (pf_row * level_w) + {1'b0, k0_pf[22:0], 1'b0};
+                block_step <= 3'd6;
             end
+            3'd6: if (f_ack) begin
+                emit_x     <= 16'd0;
+                acc_x      <= src_x0;
+                rd_idx     <= {AIDX{1'b0}};
+                block_step <= 3'd0;
+                st         <= S_EMIT;
+            end
+            default: st <= S_BFETCH;
             endcase
         end
 
@@ -360,5 +372,7 @@ always @(posedge clk or negedge resetn) begin
         endcase
     end
 end
+
+assign dbg_state = st;
 
 endmodule
