@@ -67,7 +67,8 @@ module maps_render #(
     output reg  [15:0] fetch_count,
 
     output reg  [11:0] out_x,
-    output reg  [23:0] out_rgb,
+    output reg  [23:0] out_rgb,      // palette-resolved, for the testbench
+    output reg  [7:0]  out_idx,      // the palette index, for a cross-domain line store
     output reg         out_valid
 );
 
@@ -91,7 +92,6 @@ reg [AIDX-1:0] rd_idx, rd_idx_d;
 reg [15:0] q0, q1, q2, qc_d, qn_d;
 reg [1:0]  cur, nxt;
 
-integer k;
 always @(posedge clk or negedge resetn) begin
     if (!resetn) begin
         q0 <= 16'd0; q1 <= 16'd0; q2 <= 16'd0; qc_d <= 16'd0; qn_d <= 16'd0;
@@ -198,10 +198,10 @@ always @(posedge clk or negedge resetn) begin
         p2_v <= 1'b0; p2_bil <= 1'b0; p2_x <= 12'd0;
         p2_h0 <= 8'd0; p2_h1 <= 8'd0; p2_wy <= 16'd0;
         p3_v <= 1'b0; p3_x <= 12'd0; p3_idx <= 8'd0;
-        out_x <= 12'd0; out_rgb <= 24'd0; out_valid <= 1'b0; fetch_count <= 16'd0;
-        for (k = 0; k < SPAN; k = k + 1) begin
-            lb0[k] <= 16'd0; lb1[k] <= 16'd0; lb2[k] <= 16'd0;
-        end
+        out_x <= 12'd0; out_rgb <= 24'd0; out_idx <= 8'd0; out_valid <= 1'b0; fetch_count <= 16'd0;
+        // The row buffers are deliberately not reset: a reset forces them out
+        // of block RAM into flip-flops, and they are only read once bval says
+        // the row has landed.
     end else begin
         out_valid <= 1'b0;
         p1_v     <= 1'b0;
@@ -256,6 +256,7 @@ always @(posedge clk or negedge resetn) begin
         end
         if (p3_v) begin
             out_rgb   <= pal[p3_idx];
+            out_idx   <= p3_idx;
             out_x     <= p3_x;
             out_valid <= 1'b1;
         end

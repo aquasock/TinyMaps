@@ -189,3 +189,43 @@ Integration: wire `maps_link_rx`, `maps_render` and `sdram_ctrl` into `tinymaps_
 - User Test: N/A
 
 ---
+
+## 6 COMMIT Unreleased 2026-10-26T03:56:50-07:00
+
+#### Coming From:
+
+Unreleased 2a32611
+
+#### Purpose:
+
+Integrate the three verified modules into `tinymaps_top` and commit the result with a handoff, so a later session can continue from the evidence rather than from scratch.
+
+#### Outcome:
+
+The integration is written: `maps_video_rd.sv` adapts the renderer's streaming row read to `sdram_ctrl`'s video channel, `maps_hdmi.sv` wraps the HDMI stage, the top carries all three modules with the SDRAM pin constraints and the four PLL and divider placement constraints taken from TinyTang's desktop core, `tinymaps.sdc` declares `fclk`, and `maps_render` exposes the palette index it resolves so the line store can be eight bits wide. It synthesises and it routes, and it does not close timing: `hclk` reaches 66.16 MHz against the 74.25 MHz a 720p line needs, so the gate refuses to pack and no bitstream exists. The failing path is the HDMI encoder's disparity accumulator at 14.48 ns, and comparison against TinyTang's desktop core built here on the same toolchain, at 110.67 MHz with the same `hdmi.sv`, localises the cause to synthesis rather than to the board or the toolchain: the TMDS serialiser cluster is 545 cells in this design against 261 there, and the critical path runs `video_data -> serialiser multiplexers -> acc` where the desktop's runs `video_data -> acc`. Nine levers were measured and rejected, recorded with their numbers in `docs/integration-blocker.md`: placement seeds 1 to 3, the PLL and divider sites, a live versus constant `hdmi` reset, single versus two clock domains, a distributed-RAM line store replaced by a synchronous block-RAM read, a registered rather than combinational `rgb`, `synth_gowin -abc9`, staged ABC at `-W 100`, and `-noflatten`. The commit is deliberately made with a bitstream gate that fails, against this project's usual rule that `main` builds, because the integration exists only in the working tree otherwise and the user asked for it committed for handoff; `docs/HANDOFF.md` records the state, the decisions that must not be re-litigated, and the single next action. Both existing testbenches still pass unchanged: `tb_maps_link_rx` on all five cases and `tb_maps_render` with `check_render` matching all five viewports pixel for pixel, so the failure is confined to the integrated top and not to the modules it joins. Nothing was deployed and no user test applies. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Put a register between `q_m` and the disparity accumulator in `fpga/tinymaps/hdmi/tmds_channel.sv`, which shortens the encoder's path regardless of how ABC factors the netlist, and build a simulation harness that compares the encoder's output before and after that change, since it costs one clock of latency and HDMI pixel alignment is load-bearing here. Separately, the pack loader is still unwired: `sdram_ctrl`'s write port is idle and the viewport registers are constants.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- docs/integration-blocker.md
+- fpga/tinymaps/build.tcl
+- fpga/tinymaps/maps_hdmi.sv
+- fpga/tinymaps/maps_render.sv
+- fpga/tinymaps/maps_video_rd.sv
+- fpga/tinymaps/tinymaps.cst
+- fpga/tinymaps/tinymaps.sdc
+- fpga/tinymaps/tinymaps_top.sv
+- tools/maps_open/synth.ys
+
+#### Status:
+
+- Build: FAIL
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

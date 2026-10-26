@@ -8,9 +8,11 @@ and the apicula fork).
 
 ## State
 
-Phase 0. The pack builder works and its output is verified, and the gateware
-skeleton builds through the open flow to a bitstream. Nothing has been deployed
-to the Tang.
+Phases 0 to 3 are done and verified by simulation. The integration is written
+and committed but **does not close timing** -- `hclk` reaches 66.16 MHz against
+the 74.25 MHz a 720p line needs -- so no bitstream exists and nothing has been
+deployed. `docs/integration-blocker.md` holds the measurements;
+`docs/HANDOFF.md` holds the state, the decisions and the next action.
 
 ## Building
 

@@ -20,3 +20,92 @@ IO_LOC "tmds_d_p[2]" K17;
 IO_PORT "tmds_d_p[2]" PULL_MODE=NONE IO_TYPE=LVCMOS33D;
 IO_LOC "tmds_d_n[2]" J17;
 IO_PORT "tmds_d_n[2]" PULL_MODE=NONE IO_TYPE=LVCMOS33D;
+
+// SDRAM: the dock's J9 module, W9825G6KH-6, from nestang's console.cst.
+IO_LOC "sdram_clk" B17;
+IO_PORT "sdram_clk" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[0]" E14;
+IO_PORT "sdram_dq[0]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[1]" E13;
+IO_PORT "sdram_dq[1]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[2]" C15;
+IO_PORT "sdram_dq[2]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[3]" C14;
+IO_PORT "sdram_dq[3]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[4]" B13;
+IO_PORT "sdram_dq[4]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[5]" C13;
+IO_PORT "sdram_dq[5]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[6]" A14;
+IO_PORT "sdram_dq[6]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[7]" A13;
+IO_PORT "sdram_dq[7]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[8]" B21;
+IO_PORT "sdram_dq[8]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[9]" A21;
+IO_PORT "sdram_dq[9]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[10]" B20;
+IO_PORT "sdram_dq[10]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[11]" A20;
+IO_PORT "sdram_dq[11]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[12]" A15;
+IO_PORT "sdram_dq[12]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[13]" A16;
+IO_PORT "sdram_dq[13]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[14]" B15;
+IO_PORT "sdram_dq[14]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dq[15]" B16;
+IO_PORT "sdram_dq[15]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[0]" D19;
+IO_PORT "sdram_a[0]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[1]" E19;
+IO_PORT "sdram_a[1]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[2]" C19;
+IO_PORT "sdram_a[2]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[3]" C18;
+IO_PORT "sdram_a[3]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[4]" E16;
+IO_PORT "sdram_a[4]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[5]" D15;
+IO_PORT "sdram_a[5]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[6]" D14;
+IO_PORT "sdram_a[6]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[7]" A19;
+IO_PORT "sdram_a[7]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[8]" A18;
+IO_PORT "sdram_a[8]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[9]" C17;
+IO_PORT "sdram_a[9]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[10]" D20;
+IO_PORT "sdram_a[10]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[11]" D17;
+IO_PORT "sdram_a[11]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_a[12]" B18;
+IO_PORT "sdram_a[12]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_ba[0]" F15;
+IO_PORT "sdram_ba[0]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_ba[1]" C20;
+IO_PORT "sdram_ba[1]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dqm[0]" F14;
+IO_PORT "sdram_dqm[0]" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_dqm[1]" F13;
+IO_PORT "sdram_dqm[1]" IO_TYPE=LVCMOS33;
+IO_PORT "sdram_clk" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_we_n" D16;
+IO_PORT "sdram_we_n" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_ras_n" F16;
+IO_PORT "sdram_ras_n" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_cas_n" E17;
+IO_PORT "sdram_cas_n" IO_TYPE=LVCMOS33;
+IO_LOC "sdram_cs_n" F21;      // was F19 on mega60k
+IO_PORT "sdram_cs_n" IO_TYPE=LVCMOS33;
+
+// PLL placement, from TinyTang's desktop core (the open-flow build of record on
+// this board).  Without these nextpnr lands pll_nes in a row-108 gap and the
+// HDMI PLL's 371.25 MHz output crosses the die on general routing.
+INS_LOC "pll_27.PLL_inst"   PLL_R[1];
+INS_LOC "pll_hdmi.PLL_inst" PLL_R[3];
+INS_LOC "pll_nes.PLL_inst"  PLL_R[0];
+// the pixel divider belongs beside the TMDS serialisers: it is what carries
+// hclk5 onto the right-side HCLK lanes they take their FCLK from.
+INS_LOC "div5" RIGHTSIDE[4];
