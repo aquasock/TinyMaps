@@ -77,6 +77,7 @@ read_slang --std 1800-2017 -U SYNTHESIS \
     src/tinymaps/maps_render.sv \
     src/tinymaps/sdram_ctrl.sv \
     src/tinymaps/maps_video_rd.sv \
+    src/tinymaps/maps_nav.sv \
     src/tinymaps/maps_uart_rx.sv \
     src/tinymaps/maps_uart_tx.sv \
     src/tinymaps/hdmi/audio_clock_regeneration_packet.sv \

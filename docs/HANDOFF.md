@@ -105,6 +105,13 @@
   one, and its comparison (frame N against frame N+1) cannot catch a fault that
   repeats identically every frame. The right instrument is probably a per-line
   lateness counter read back over the link, rather than more simulation.
+- **Pan and zoom:** commands `0x16` (mouse) and `0x17` (keyboard) move the view
+  through `maps_nav.sv`, with `0x0B` loading the level table the zoom crosses
+  with.  Verified in simulation only — `sim/tb_maps_nav.sv` checks the pan
+  arithmetic, both clamps, one zoom step with the centre held, both level
+  crossings and both end stops — and **has not been on hardware**, because the
+  Tang was disconnected when it was built.  Nothing has exercised the mouse or
+  the keyboard path at all: the frame layouts come from the BL616's own sender.
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The
   instrument to add is a per-line lateness counter read back over the link.

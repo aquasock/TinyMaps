@@ -52,6 +52,17 @@
 // output line and the row rotation cannot engage, and at or below 0.5 the next
 // finer level exists and should have been chosen instead.
 //
+// Command 0x0B loads the level table the zoom reads, up to four entries:
+//
+//     u8 count, then count * { u32 base, u16 w, u16 h }, then u32 crc
+//
+// Command 0x16 is the board's mouse, six bytes as the BL616 sends it: two of
+// frame number (0xffff means apply now), the buttons, then dx, dy and wheel as
+// signed counts.  Command 0x17 is its keyboard, the HID boot report: a modifier
+// and six usage codes, sent only when the report changes, so a held key is one
+// report and not a stream.  Neither is answered: the desk task sends them at a
+// poll rate and a reply per frame would be traffic nobody reads.
+//
 // The write port is ahb_sdram's A25 side: req, address, lanes and data held
 // steady until ack pulses.  Bytes are assembled little-endian into a 64-bit
 // word and issued with all eight lanes; a short tail goes out with only the
@@ -100,6 +111,18 @@ module maps_link_rx #(
     output reg  [31:0] vp_step,
     output reg  signed [31:0] vp_x0,
     output reg  signed [31:0] vp_y0,
+
+    // level table for the zoom, in SDRAM order, coarsest last
+    output reg  [3:0]  lv_valid,
+    output reg  [24:0] lv_base0, lv_base1, lv_base2, lv_base3,
+    output reg  [15:0] lv_w0, lv_w1, lv_w2, lv_w3,
+    output reg  [15:0] lv_h0, lv_h1, lv_h2, lv_h3,
+
+    // one navigation event: output pixels to pan, and a zoom step
+    output reg         nav_ev,
+    output reg  signed [15:0] nav_px,
+    output reg  signed [15:0] nav_py,
+    output reg  signed [1:0]  nav_zoom,
 
     // status
     output reg         busy,
@@ -187,6 +210,43 @@ always @(posedge clk) begin
                 ({7'd0, v_base} + v_size_q <= 32'h0200_0000);
 end
 
+// ----------------------------------------------------------- level table ----
+// Command 0x0B.  A count byte, then eight bytes a level, then the CRC.
+localparam [1:0] L_IDLE = 2'd0, L_BODY = 2'd1, L_CRC = 2'd2;
+
+reg  [1:0]  ls;
+reg         lv_en;
+reg  [7:0]  lv_byte;
+reg  [7:0]  lv_cnt;                 // bytes seen
+reg  [2:0]  lv_n;                   // levels the sender promised, 0 means 4
+reg  [31:0] lw;                     // the word being assembled
+reg  [31:0] l_crc, l_rx;
+reg  [24:0] lvb0, lvb1, lvb2, lvb3;
+reg  [15:0] lvw0, lvw1, lvw2, lvw3;
+reg  [15:0] lvh0, lvh1, lvh2, lvh3;
+
+// --------------------------------------------------------------- buttons ----
+// Commands 0x16 and 0x17: the board's mouse and keyboard, unanswered.  The
+// mouse report is ff ff buttons dx dy wheel; the keyboard is the HID boot
+// report, a modifier and six usage codes.
+localparam [1:0] I_IDLE = 2'd0, I_MOUSE = 2'd1, I_KEY = 2'd2;
+localparam signed [15:0] KEY_PAN = 16'sd64;
+
+reg  [1:0]  is;
+reg         in_en;
+reg  [7:0]  in_byte;
+reg  [2:0]  in_cnt;
+integer     k;
+reg  [7:0]  in_b0, in_b1, in_b2, in_b3, in_b4, in_b5, in_b6;
+reg  signed [15:0] key_px, key_py;
+reg  signed [1:0]  key_zoom;
+
+// Which level record the byte belongs to, and which byte within it.
+wire [1:0]  lrec = (lv_cnt - 8'd1) >> 3;
+
+// The seven usages of the keyboard report, newest byte first.
+wire [55:0] usages = {in_b6, in_b5, in_b4, in_b3, in_b2, in_b1, in_byte};
+
 // ----------------------------------------------------------------- loader ----
 localparam [3:0] S_MAGIC = 4'd0, S_ADDR = 4'd1, S_LEN  = 4'd2, S_ICRC = 4'd3,
                  S_HCRC  = 4'd4, S_BLK  = 4'd5, S_BCRC = 4'd6, S_ICMP = 4'd7,
@@ -239,6 +299,17 @@ always @(posedge clk or negedge resetn) begin
         viewports <= 32'd0; vp_we <= 1'b0;
         vp_base <= 25'd0; vp_w <= 16'd768; vp_h <= 16'd768;
         vp_step <= 32'd39322; vp_x0 <= 32'sd0; vp_y0 <= 32'sd0;
+        ls <= L_IDLE; lv_en <= 1'b0; lv_byte <= 8'd0; lv_cnt <= 8'd0;
+        lv_n <= 3'd0; lw <= 32'd0; l_crc <= 32'hFFFFFFFF; l_rx <= 32'd0;
+        lv_valid <= 4'd0;
+        lvb0 <= 25'd0; lvb1 <= 25'd0; lvb2 <= 25'd0; lvb3 <= 25'd0;
+        lvw0 <= 16'd0; lvw1 <= 16'd0; lvw2 <= 16'd0; lvw3 <= 16'd0;
+        lvh0 <= 16'd0; lvh1 <= 16'd0; lvh2 <= 16'd0; lvh3 <= 16'd0;
+        is <= I_IDLE; in_en <= 1'b0; in_byte <= 8'd0; in_cnt <= 3'd0;
+        in_b0 <= 8'd0; in_b1 <= 8'd0; in_b2 <= 8'd0; in_b3 <= 8'd0;
+        in_b4 <= 8'd0; in_b5 <= 8'd0; in_b6 <= 8'd0;
+        key_px <= 16'sd0; key_py <= 16'sd0; key_zoom <= 2'sd0;
+        nav_ev <= 1'b0; nav_px <= 16'sd0; nav_py <= 16'sd0; nav_zoom <= 2'sd0;
         st <= S_MAGIC; after_tx <= S_MAGIC;
         bidx <= 2'd0; cidx <= 2'd0; word <= 32'd0;
         img_addr <= 32'd0; img_len <= 32'd0; img_left <= 32'd0;
@@ -260,6 +331,9 @@ always @(posedge clk or negedge resetn) begin
         pal_we <= 1'b0;
         vp_valid <= 1'b0;
         vp_we <= 1'b0;
+        lv_en <= 1'b0;
+        in_en <= 1'b0;
+        nav_ev <= 1'b0;
         tx_start <= 1'b0;
 
         // ---------------------------------------------------- frame parser --
@@ -275,6 +349,17 @@ always @(posedge clk or negedge resetn) begin
                             fcmd  <= rx_data;
                             fleft <= flen[11:0] - 12'd1;
                             fs    <= F_DATA;
+                            if (rx_data == 8'h0B) begin
+                                ls <= L_BODY;
+                                lv_cnt <= 8'd0;
+                                lw <= 32'd0;
+                                l_crc <= 32'hFFFFFFFF;
+                                l_rx <= 32'd0;
+                                lv_valid <= 4'd0;
+                            end
+                            if (rx_data == 8'h16) is <= I_MOUSE;
+                            if (rx_data == 8'h17) is <= I_KEY;
+                            if (rx_data == 8'h16 || rx_data == 8'h17) in_cnt <= 3'd0;
                             if (rx_data == 8'h0A) begin
                                 vs <= V_BODY;
                                 vb <= 5'd0;
@@ -300,6 +385,12 @@ always @(posedge clk or negedge resetn) begin
                             end else if (fcmd == 8'h0A) begin
                                 vp_valid <= 1'b1;
                                 vp_byte  <= rx_data;
+                            end else if (fcmd == 8'h0B) begin
+                                lv_en   <= 1'b1;
+                                lv_byte <= rx_data;
+                            end else if (fcmd == 8'h16 || fcmd == 8'h17) begin
+                                in_en   <= 1'b1;
+                                in_byte <= rx_data;
                             end
                             if (fleft == 12'd1) fs <= F_IDLE;
                             else fleft <= fleft - 12'd1;
@@ -383,6 +474,114 @@ always @(posedge clk or negedge resetn) begin
                     end
                 end
                 default: ps <= P_IDLE;
+            endcase
+        end
+
+        // ---------------------------------------------------- level table --
+        if (lv_en) begin
+            case (ls)
+                L_BODY: begin
+                    l_crc <= crc32_byte(l_crc, lv_byte);
+                    if (lv_cnt == 8'd0) begin
+                        lv_n  <= lv_byte[2:0];
+                        lv_cnt <= 8'd1;
+                    end else begin
+                        lw <= {lv_byte, lw[31:8]};
+                        if (((lv_cnt - 8'd1) & 8'd7) == 8'd3) begin
+                            case (lrec)
+                                2'd0: lvb0 <= {lv_byte, lw[31:8]};
+                                2'd1: lvb1 <= {lv_byte, lw[31:8]};
+                                2'd2: lvb2 <= {lv_byte, lw[31:8]};
+                                default: lvb3 <= {lv_byte, lw[31:8]};
+                            endcase
+                        end else if (((lv_cnt - 8'd1) & 8'd7) == 8'd5) begin
+                            case (lrec)
+                                2'd0: lvw0 <= lw[31:16];
+                                2'd1: lvw1 <= lw[31:16];
+                                2'd2: lvw2 <= lw[31:16];
+                                default: lvw3 <= lw[31:16];
+                            endcase
+                        end else if (((lv_cnt - 8'd1) & 8'd7) == 8'd7) begin
+                            case (lrec)
+                                2'd0: lvh0 <= {lv_byte, lw[31:8]};
+                                2'd1: lvh1 <= {lv_byte, lw[31:8]};
+                                2'd2: lvh2 <= {lv_byte, lw[31:8]};
+                                default: lvh3 <= {lv_byte, lw[31:8]};
+                            endcase
+                            lv_valid <= lv_valid | (4'd1 << lrec);
+                        end
+                        lv_cnt <= lv_cnt + 8'd1;
+                        if (lv_cnt == ({5'd0, lv_n} << 3)) begin
+                            ls     <= L_CRC;
+                            lv_cnt <= 8'd0;
+                        end
+                    end
+                end
+                L_CRC: begin
+                    l_rx[8*lv_cnt[1:0] +: 8] <= lv_byte;
+                    lv_cnt <= lv_cnt + 8'd1;
+                    if (lv_cnt[1:0] == 2'd3) begin
+                        if (~l_crc != {lv_byte, l_rx[23:0]}) begin
+                            last_nak <= "L";
+                            tx_b0 <= NAK; tx_b1 <= "L"; tx_two <= 1'b1;
+                        end else begin
+                            tx_b0 <= ACK; tx_b1 <= 8'd0; tx_two <= 1'b0;
+                        end
+                        tx_step <= 2'd0; tx_i <= 1'b0; after_tx <= S_MAGIC;
+                        st <= S_TX; ls <= L_IDLE;
+                    end
+                end
+                default: ls <= L_IDLE;
+            endcase
+        end
+
+        // ------------------------------------------------------- buttons ----
+        if (in_en) begin
+            case (is)
+                I_MOUSE: begin
+                    case (in_cnt)
+                        3'd0: in_b0 <= in_byte;
+                        3'd1: in_b1 <= in_byte;
+                        3'd2: in_b2 <= in_byte;
+                        3'd3: nav_px <= {{8{in_byte[7]}}, in_byte};
+                        3'd4: nav_py <= {{8{in_byte[7]}}, in_byte};
+                        default: begin
+                            nav_zoom <= in_byte[7] ? 2'sd1 : (in_byte[6:0] != 7'd0 ? -2'sd1 : 2'sd0);
+                            nav_ev   <= 1'b1;
+                        end
+                    endcase
+                    if (in_cnt != 3'd5) in_cnt <= in_cnt + 3'd1;
+                    else is <= I_IDLE;
+                end
+                I_KEY: begin
+                    if (in_cnt == 3'd6) begin
+                        nav_px <= 16'sd0; nav_py <= 16'sd0; nav_zoom <= 2'sd0;
+                        for (k = 0; k < 7; k = k + 1) begin
+                            case (usages[8*k +: 8])
+                                8'h50: nav_px <= -KEY_PAN;      // left
+                                8'h4F: nav_px <= KEY_PAN;       // right
+                                8'h52: nav_py <= -KEY_PAN;      // up
+                                8'h51: nav_py <= KEY_PAN;       // down
+                                8'h2E: nav_zoom <= -2'sd1;      // '=' zoom in
+                                8'h2D: nav_zoom <= 2'sd1;       // '-' zoom out
+                                default: ;
+                            endcase
+                        end
+                        nav_ev <= 1'b1;
+                        is <= I_IDLE;
+                    end else begin
+                        case (in_cnt)
+                            3'd0: in_b0 <= in_byte;
+                            3'd1: in_b1 <= in_byte;
+                            3'd2: in_b2 <= in_byte;
+                            3'd3: in_b3 <= in_byte;
+                            3'd4: in_b4 <= in_byte;
+                            default: in_b5 <= in_byte;
+                        endcase
+                        in_cnt <= in_cnt + 3'd1;
+                    end
+                end
+                default: is <= I_IDLE;
             endcase
         end
 

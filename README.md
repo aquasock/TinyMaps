@@ -146,6 +146,7 @@ SDRAM; nothing is latched on a refusal. The range is the renderer's operating
 limit and is enforced in the fabric, not trusted from the host.
 
     tools/load_pack.py                          # palette and all four levels
+    tools/set_levels.py                         # the table the zoom crosses with
     tools/set_view.py --level 3                 # show one, at its own scale
 
 `load_pack.py` puts 28 MiB in the SDRAM in about two and a half minutes and
@@ -153,9 +154,31 @@ limit and is enforced in the fabric, not trusted from the host.
 of 1.0 or, for a level narrower than the screen, enough magnification to fill
 it -- 768 columns across 1280 is 0.6.
 
+## Pan and zoom
+
+The board's Bluetooth mouse and keyboard drive the view, over the same link:
+
+- command `0x16` is the mouse -- `ff ff buttons dx dy wheel` -- and moves the
+  view by whole 8-pixel nudges, the remainder kept for the next report; the
+  wheel zooms.
+- command `0x17` is the keyboard, the HID boot report.  Arrows pan 64 pixels,
+  `=` and `-` zoom.  A boot keyboard reports state rather than events, so a held
+  key is one report: the keys do not repeat.
+- command `0x0B` loads the level table, `u8 count` then per level
+  `{u32 base, u16 w, u16 h}` and a CRC.
+
+`maps_nav.sv` does the arithmetic.  Zooming walks five steps between 0.5 and 1.0
+a quarter of an octave apart, keeping the centre of the screen on the same
+ground point, and steps to the next level when the walk runs off either end.
+Because the pack's levels are a factor of two apart in metres per pixel, a
+crossing is a doubling or halving of the source coordinates and nothing else.
+Nothing in it multiplies two variables: the step table is constant and the
+scale factors are shifts and adds of the step.
+
+A host viewport command replaces the view and clears any unapplied pan.
+
 Not implemented yet: the loader has no idle timeout (the `TIMEOUT` parameter is
-unused), and panning and zooming still mean re-running `set_view.py` rather than
-a control the core reads itself.
+unused).
 
 ## Map packs
 

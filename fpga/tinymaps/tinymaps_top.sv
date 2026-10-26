@@ -127,6 +127,18 @@ reg         [24:0] LEVEL_BASE = 25'd0;
 reg         [15:0] LEVEL_W    = 16'd768;
 reg         [15:0] LEVEL_H    = 16'd768;
 wire               vp_we;
+wire        [3:0]  lv_valid;
+wire        [24:0] lv_base0, lv_base1, lv_base2, lv_base3;
+wire        [15:0] lv_w0, lv_w1, lv_w2, lv_w3;
+wire        [15:0] lv_h0, lv_h1, lv_h2, lv_h3;
+wire               nav_ev;
+wire signed [15:0] nav_px, nav_py;
+wire signed [1:0]  nav_zoom;
+wire               nav_we;
+wire        [24:0] nav_base;
+wire        [15:0] nav_w, nav_h;
+wire        [31:0] nav_step;
+wire signed [31:0] nav_x0, nav_y0;
 wire        [24:0] vp_base;
 wire        [15:0] vp_w, vp_h;
 wire        [31:0] vp_step;
@@ -175,8 +187,9 @@ wire line_tick = tog_f[2] ^ tog_f[1];
 // cause of lines 1 to 4 is not established; see docs/HANDOFF.md.
 wire [9:0] rc_cy = (cy >= OUT_H) ? 10'd0 : cy + 10'd1;
 
-// A viewport write is only visible to the renderer, and the range guard that
-// decides whether to accept it lives in the receiver, in front of this.
+// Two writers: the host's viewport command, which replaces everything, and the
+// navigation events, which move what is already there.  The host wins if both
+// land together, and it also clears the navigation's unapplied pan remainder.
 always @(posedge hclk)
     if (vp_we) begin
         LEVEL_BASE <= vp_base;
@@ -185,7 +198,29 @@ always @(posedge hclk)
         STEP       <= vp_step;
         SRC_X0     <= vp_x0;
         SRC_Y0     <= vp_y0;
+    end else if (nav_we) begin
+        LEVEL_BASE <= nav_base;
+        LEVEL_W    <= nav_w;
+        LEVEL_H    <= nav_h;
+        STEP       <= nav_step;
+        SRC_X0     <= nav_x0;
+        SRC_Y0     <= nav_y0;
     end
+
+maps_nav #(.OUT_W(OUT_W), .OUT_H(OUT_H)) u_nav (
+    .clk(hclk), .resetn(rstn_h),
+    .cur_base(LEVEL_BASE), .cur_w(LEVEL_W), .cur_h(LEVEL_H),
+    .cur_step(STEP), .cur_x0(SRC_X0), .cur_y0(SRC_Y0),
+    .lv_valid(lv_valid),
+    .lv_base0(lv_base0), .lv_base1(lv_base1),
+    .lv_base2(lv_base2), .lv_base3(lv_base3),
+    .lv_w0(lv_w0), .lv_w1(lv_w1), .lv_w2(lv_w2), .lv_w3(lv_w3),
+    .lv_h0(lv_h0), .lv_h1(lv_h1), .lv_h2(lv_h2), .lv_h3(lv_h3),
+    .clear(vp_we),
+    .ev(nav_ev), .ev_px(nav_px), .ev_py(nav_py), .ev_zoom(nav_zoom),
+    .o_we(nav_we), .o_base(nav_base), .o_w(nav_w), .o_h(nav_h),
+    .o_step(nav_step), .o_x0(nav_x0), .o_y0(nav_y0), .busy()
+);
 
 maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(OUT_W/2 + 4)) u_render (
     .clk(hclk), .resetn(rstn_h),
@@ -266,6 +301,12 @@ maps_link_rx u_loader (
     .pal_we(ld_pal_we), .pal_idx(ld_pal_idx), .pal_data(ld_pal_data),
     .vp_we(vp_we), .vp_base(vp_base), .vp_w(vp_w), .vp_h(vp_h),
     .vp_step(vp_step), .vp_x0(vp_x0), .vp_y0(vp_y0),
+    .lv_valid(lv_valid),
+    .lv_base0(lv_base0), .lv_base1(lv_base1),
+    .lv_base2(lv_base2), .lv_base3(lv_base3),
+    .lv_w0(lv_w0), .lv_w1(lv_w1), .lv_w2(lv_w2), .lv_w3(lv_w3),
+    .lv_h0(lv_h0), .lv_h1(lv_h1), .lv_h2(lv_h2), .lv_h3(lv_h3),
+    .nav_ev(nav_ev), .nav_px(nav_px), .nav_py(nav_py), .nav_zoom(nav_zoom),
     .busy(), .images(), .bytes_written(), .last_nak(),
     .overflows(), .timeouts()
 );

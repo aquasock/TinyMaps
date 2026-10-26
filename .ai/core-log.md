@@ -539,3 +539,41 @@ The frame-start issue: an HDMI monitor shows it with no capture in the path, so 
 - User Test: PASS
 
 ---
+
+## 16 COMMIT Unreleased 2026-10-26T11:55:13-07:00
+
+#### Coming From:
+
+Unreleased ad2974a
+
+#### Purpose:
+
+Let the board's Bluetooth mouse and keyboard pan and zoom the map, which is the first input the core has ever taken from them.
+
+#### Outcome:
+
+The link now carries three more commands. `0x16` is the board's mouse, six bytes as its own desk task sends them -- two of frame number, the buttons, then dx, dy and wheel -- and each report is turned into an output-pixel pan and a zoom direction. `0x17` is the keyboard in the HID boot layout, arrows panning 64 pixels and `=` and `-` zooming; a boot keyboard reports state rather than events, so a held key is one report and the keys do not repeat, which is honest rather than a defect. Neither is answered, because the desk task sends them at a poll rate and a reply per frame would be traffic nobody reads. `0x0B` carries the level table, a count and then each level's SDRAM address, width and height with a CRC, so the core can cross levels on its own. `maps_nav.sv` does the arithmetic: panning moves the origin by whole 8-pixel nudges and keeps the remainder for the next report, zooming walks five steps between 0.5 and 1.0 a quarter of an octave apart and keeps the centre of the screen on the same ground point, and running off either end of that table steps to the next level, where a factor of two in metres per pixel makes the crossing a doubling or halving of the source coordinates. Nothing in it multiplies two variables -- the step table is constant and half a line, a line, half a screen and a whole screen are shift-and-add of the step -- and the level and table position are recovered from the base and step by comparison, so a viewport the host set at any step zooms from where it is. Three defects were found by `sim/tb_maps_nav.sv` before any hardware: the bound on the origin went negative when the level was narrower than the screen, which let the origin go negative and read before the level; and the pan remainder survived a host viewport command, so an old remainder could move a freshly set view, which `maps_nav` now clears on the same pulse that latches a viewport. The testbench checks properties rather than restating the arithmetic -- a 32-pixel pan moving exactly 32 steps, both clamps, the centre held through one step, both crossings doubling or halving the origin and landing on the neighbouring level's base, and both end stops -- and it passes. `tools/set_levels.py` sends the table from the pack. The core builds at placement seed 1 to `tinymaps.eaea3e4132d1.bin` with `hclk` at 91.44 MHz against 74.25 and `clk` at 413.74 against 21.49, setup=0 and hold=0, and every testbench passes. Deployment did not run: the Tang was disconnected before the build finished, so nothing here has been on hardware and neither the mouse nor the keyboard path has ever carried a real report -- the frame layouts are taken from the BL616's own sender and nothing else. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy `tinymaps.eaea3e4132d1.bin` when the Tang is back, load the pack, send the level table, and try the mouse and keyboard: the wheel should zoom through five steps and then cross a level, the mouse should pan with the remainder carried between reports, and the arrows and `+`/`-` should do the same from the keyboard. The frame-start issue is still open and will show while panning; the user's instruction is to look at it again after pan and zoom are real.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/build.tcl
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/maps_nav.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_nav.sv
+- tools/maps_open/synth.ys
+- tools/set_levels.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---
