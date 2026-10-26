@@ -336,3 +336,34 @@ Put `tinymaps.8fe42ba24d8d.bin` on the card with TinyTang's `tangput`, `tangload
 - User Test: NOT RUN
 
 ---
+
+## 10 COMMIT Unreleased 2026-10-26T10:31:50-07:00
+
+#### Coming From:
+
+Unreleased 876ade7
+
+#### Purpose:
+
+Put the loader build on the Tang and load a known image, which is the only way to establish that the renderer draws what the loader wrote.
+
+#### Outcome:
+
+`tinymaps.8fe42ba24d8d.bin` was uploaded to `/root/cores/console138k/tinymaps.bin` with TinyTang's `tangput` and programmed with `tangload`, which reported `ID=0001081b` and `Load SRAM`. `tools/load_image.py` then took the console through its prompt probe and `fpgapipe`, was answered ACK for the header, and sent 589,824 bytes in 3.1 s at 190 kB/s with every one of the 72 blocks answered on its first attempt; the loader checks the whole image against the header's CRC-32 and NAKs `'I'` on a mismatch, and did not, so the SDRAM held exactly the bytes that were sent. The user reports the screen shows the staircase with a white strip at the left and right edges and that the rest looks right, and the strips are not a fault: they are the test image's own four-pixel border, which is meant to mark the level's extent and is magnified to about seven pixels at 0.6 source pixels per output pixel. Measuring the capture confirms the picture quantitatively: twelve columns at a 106.7-pixel pitch, seven cell rows visible before the level is cropped at the bottom (720 output rows at 0.6 reach source row 432 of 768), a four-pixel strip at the left edge and six at the right, and values stepping monotonically from 255 at the top left to 111 at the bottom of the frame, so the loader, both UARTs, the frame parser, the block and image CRCs, the A25 write port and the renderer's addressing all agree on the one thing they were for. One finding is recorded for the next cycle rather than fixed here: the capture shows the indices lifted and clipped, with 236 arriving as 255 and 107 as 111, which is the shape of a limited-range RGB interpretation downstream, and the AVI info packet leaves `RGB_QUANTIZATION_RANGE` at its default of `2'b00`. That matters more for the pack's palette than for a grey ramp, because it compresses the top of the range and would wash out the brightest map colours. Deployment and user test therefore both ran and both passed, and no build ran in this cycle because the image deployed is the artefact entry 9 built and reproduced from an empty tree. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Two decisions stand between this and a real map. First, declare `RGB_QUANTIZATION_RANGE = 2'b01` in the AVI info frame so the sink stops reading full-range RGB as limited range, which is an edit to the vendored `hdmi.sv` and so needs its departure from upstream recorded; verify it by reloading the test image and measuring the capture again, where index 236 should arrive as 236. Second, replace the fabric grey ramp with the pack's own 256 entries, which needs a decision on how the loader supplies them — a palette command on the link, a second loader pass over the pack's palette section, or a region of SDRAM the renderer reads. Then a level selector that holds `step` inside `(0.5, 1]` across the pack's four levels, and a load of the full 28 MB pack, which at 190 kB/s is about two and a half minutes and has never been tried.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

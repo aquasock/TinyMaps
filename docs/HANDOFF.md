@@ -1,21 +1,23 @@
 # Handoff — TinyMaps — 2026-10-26
 
-- **State:** Phases 0–3 are verified in simulation. The integration closes timing
-  and packs. An earlier bitstream has been on the Tang and works: 1280x720p60
-  locks and the picture is stable. The pack loader is now wired — UART in and
-  out on the BL616's link, `maps_link_rx` behind them on the SDRAM's A25 port —
-  and that build passes every simulation and packs a bitstream, but it has not
-  been on the board. What has never happened is a *known image* through the
-  renderer: until one is loaded, the screen proves the path runs, not that it
-  indexes correctly.
+- **State:** Phases 0–3 are verified in simulation, the integration closes
+  timing, and the pack loader works on hardware. `tinymaps.8fe42ba24d8d.bin` is
+  on the Tang, and a 589,824-byte test image sent over the BL616's UART was
+  written to the SDRAM and drawn: twelve columns at the expected 106.7-pixel
+  pitch, the staircase running white to dark from the top left, the level's
+  border where it belongs. That is the first known image through the renderer,
+  and it exercises the loader, both UARTs, the framing, the CRCs and the
+  renderer's addressing at once. What is left is colour: the palette is still a
+  grey ramp in fabric, and the picture arrives lifted and clipped at the top
+  because the sink treats the RGB as limited range.
 
 - **Landed:** `79bd168` scaffold + pack builder · `1e1de8f` Phase 0 skeleton ·
   `2e8ea8e` Phase 2 load receiver · `dbcf8e1` Phase 3 nearest renderer ·
   `ad099df` bilinear + three row buffers · `2107fae` row reuse across the
   magnifying range · `5e4db16`, `2a32611` blocker records · `32a8219`
   integration · `1342a0e` encoder pipeline, timing closed · `1595480` first
-  deployment, user test passed · this cycle: UART pair, loader wired, host
-  tools, and the viewport constants pointed at a test image.
+  deployment, user test passed · `876ade7` UART pair, loader wired, host tools ·
+  this cycle: the loader deployed and a known image verified on hardware.
 
 - **Branches/PRs:** none. Everything is on `main`, which is the only branch.
 
@@ -27,7 +29,8 @@
   83.06 MHz against 74.25 and `clk` 426.26 against 21.49, setup=0 hold=0. Built
   from an empty `build/` to the same hashes twice. This is the first build that
   carries the loader. The bitstream that ran on the board was
-  `tinymaps.46bc5de68231.bin`, which has no loader in it.
+  `tinymaps.46bc5de68231.bin` and now holds `tinymaps.8fe42ba24d8d.bin`; the
+  board was running the loader build when the test image was loaded.
 
 - **On the Tang:** `/root/cores/console138k/tinymaps.bin` on the card holds the
   loader-less image. `tangload /root/cores/console138k/tinymaps.bin` programs
@@ -65,21 +68,22 @@
     that honest.
   - **GPL-3.0-only.** `hdmi/` and `pll/` derive from nestang (GPL-3.0).
 
-- **Next step:** put `tinymaps.8fe42ba24d8d.bin` on the card, `tangload` it, and
-  run `tools/load_image.py work/test/test-image.bin`. The screen should become a
-  12 by 12 staircase, white at the top left and black at the bottom right, in
-  grey. That is the first known image through the renderer. If it arrives, the
-  next work is the pack's palette (the fabric grey ramp has to become the pack's
-  own 256 colours) and then a level selector.
+- **Next step:** the pack's palette, which is now the only thing between this and
+  a real map. Two parts, and the first is cheaper than it looks: declare
+  `RGB_QUANTIZATION_RANGE = 2'b01` (full range) in the AVI info frame, because
+  the capture shows index 236 arriving as 255 and everything above about 235
+  clipping to white, which is what a limited-range interpretation does — the
+  vendored `hdmi.sv` leaves that field at its default. Then replace the fabric
+  grey ramp with the pack's 256 entries, which needs a decision on how the
+  loader supplies them. After that, a level selector that holds `step` inside
+  `(0.5, 1]` across the pack's four levels.
 
 - **Continuation records:** `docs/integration-blocker.md` (timing result, the
   fix, the exhausted levers, the encoder's open conformance question).
 
-- **Unverified:** the loader has never run on hardware, and the UART pins
-  (`uart_rx` V14, `uart_tx` U15) are taken from TinyTang's desktop core without
-  having been exercised from this core. The host tool's framing is proven only
-  against the testbench's, which is the same byte sequence the RTL accepts in
-  simulation. The palette is still a grey ramp, so a loaded image is shown in
-  grey rather than in its own colours. The renderer's real-time claim is by
-  construction, not measured: whether the SDRAM delivers a 1284-entry row inside
-  a 1650-clock line has not been exercised with real data.
+- **Unverified:** the renderer's real-time claim is by construction, not
+  measured — whether the SDRAM delivers a 1284-entry row inside a 1650-clock
+  line has held so far only with a 768-wide level and a static picture, and no
+  one has panned or changed level on hardware. The loader has no idle timeout.
+  Nothing has loaded more than 576 KiB, so the pack's 28 MB has not been tried;
+  at 190 kB/s that is about two and a half minutes.

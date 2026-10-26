@@ -10,11 +10,12 @@ and the apicula fork).
 
 Phases 0 to 3 are done and verified by simulation. The integration **closes
 timing** -- `hclk` at 83.06 MHz against the 74.25 MHz a 720p line needs, at
-placement seed 1 -- so the flow packs a bitstream, and an earlier one was
-deployed and confirmed on the Tang: HDMI locks 1280x720p60 and the picture is
-stable. The pack loader is now wired as well, so an image can be sent over the
-BL616's UART; that build has passed its simulations and packed a bitstream but
-has not been on the board yet. `docs/HANDOFF.md` holds the state, the decisions
+placement seed 1 -- so the flow packs a bitstream, and that bitstream runs on
+the Tang. The pack loader works on hardware too: an image sent over the BL616's
+UART lands in the SDRAM and is drawn, which was checked on 2026-10-26 with a
+known test image rather than by eye. The palette is still a grey ramp in fabric,
+so an image appears in grey, and the levels arrive lifted and clipped at the top
+because the sink reads the RGB as limited range. `docs/HANDOFF.md` holds the state, the decisions
 and the next action; `docs/integration-blocker.md` holds the timing
 measurements, the fix and the levers that were ruled out.
 
