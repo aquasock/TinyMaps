@@ -18,6 +18,10 @@ module hdmi
     // This flag also tends to cause receivers to treat RGB values as full
     // range (0-255).
     parameter bit IT_CONTENT = 1'b1,
+    // TinyMaps change: 01 = full range.  The core's palette and image data are
+    // full-range RGB, and leaving this at its default let the sink read 236 as
+    // 255 and clip everything above it.  Default unchanged for other users.
+    parameter bit [1:0] RGB_QUANTIZATION_RANGE = 2'b00,
 
     // Defaults to minimum bit lengths required to represent positions.
     // Modify these parameters if you have alternate desired bit lengths.
@@ -308,6 +312,7 @@ generate
             .VIDEO_ID_CODE(VIDEO_ID_CODE),
             .VIDEO_RATE(VIDEO_RATE),
             .IT_CONTENT(IT_CONTENT),
+            .RGB_QUANTIZATION_RANGE(RGB_QUANTIZATION_RANGE),
             .AUDIO_RATE(AUDIO_RATE),
             .AUDIO_BIT_WIDTH(AUDIO_BIT_WIDTH),
             .VENDOR_NAME(VENDOR_NAME),

@@ -62,26 +62,32 @@
   - **One clock domain.** Everything on `hclk`; an `fclk` split was tried and
     bought nothing. Block RAM must never be written on one clock and read on
     another on this part (Apicula reads it back wrong on the GW5AST-138).
+  - **The AVI InfoFrame declares full-range RGB.** `RGB_QUANTIZATION_RANGE =
+    2'b01`, set in `maps_hdmi.sv`. The first hardware capture showed the sink
+    reading full-range data as limited range (236 arrived as 255, everything
+    above about 235 clipped), so the source now says what it means. The vendored
+    modules carry the parameter with their defaults unchanged.
   - **The encoder pipeline register stays.** `tmds_channel` registers `q_m` with
     `mode`, `control_data` and `data_island_data`, costing one pixel of latency
     across every mode; `sim/tb_hdmi_encode.sv` with `tools/check_tmds.py` keeps
     that honest.
   - **GPL-3.0-only.** `hdmi/` and `pll/` derive from nestang (GPL-3.0).
 
-- **Next step:** the pack's palette, which is now the only thing between this and
-  a real map. Two parts, and the first is cheaper than it looks: declare
-  `RGB_QUANTIZATION_RANGE = 2'b01` (full range) in the AVI info frame, because
-  the capture shows index 236 arriving as 255 and everything above about 235
-  clipping to white, which is what a limited-range interpretation does — the
-  vendored `hdmi.sv` leaves that field at its default. Then replace the fabric
-  grey ramp with the pack's 256 entries, which needs a decision on how the
-  loader supplies them. After that, a level selector that holds `step` inside
+- **Next step:** put `tinymaps.a54a650eae81.bin` on the board and re-load the
+  test image, then measure a capture the same way as before: index 236 should
+  arrive as 236 rather than 255. That confirms the full-range declaration,
+  which is built and simulated but has not been on hardware because the Tang was
+  not connected. Once it is confirmed, the pack's palette is the last thing
+  between this and a real map, and it needs a decision on how the loader
+  supplies 256 entries. After that, a level selector that holds `step` inside
   `(0.5, 1]` across the pack's four levels.
 
 - **Continuation records:** `docs/integration-blocker.md` (timing result, the
   fix, the exhausted levers, the encoder's open conformance question).
 
-- **Unverified:** the renderer's real-time claim is by construction, not
+- **Unverified:** the full-range AVI declaration has not been on hardware, so
+  the lift and clip are still the last measured behaviour of the picture. The
+  renderer's real-time claim is by construction, not
   measured — whether the SDRAM delivers a 1284-entry row inside a 1650-clock
   line has held so far only with a 768-wide level and a static picture, and no
   one has panned or changed level on hardware. The loader has no idle timeout.

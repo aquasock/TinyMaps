@@ -14,8 +14,10 @@ placement seed 1 -- so the flow packs a bitstream, and that bitstream runs on
 the Tang. The pack loader works on hardware too: an image sent over the BL616's
 UART lands in the SDRAM and is drawn, which was checked on 2026-10-26 with a
 known test image rather than by eye. The palette is still a grey ramp in fabric,
-so an image appears in grey, and the levels arrive lifted and clipped at the top
-because the sink reads the RGB as limited range. `docs/HANDOFF.md` holds the state, the decisions
+so an image appears in grey. The first hardware capture also showed the levels
+lifted and clipped at the top -- the sink reading full-range RGB as limited
+range -- so the AVI InfoFrame now declares full range; that change is built and
+simulated but has not been back on the board. `docs/HANDOFF.md` holds the state, the decisions
 and the next action; `docs/integration-blocker.md` holds the timing
 measurements, the fix and the levers that were ruled out.
 
@@ -61,6 +63,14 @@ and the disparity decision is taken from the registered byte. The register is
 what lets `hclk` close -- ABC had merged the serialiser's multiplexers into the
 encoder's disparity path -- and it costs one pixel of latency, shared by every
 mode so the picture does not shift against its own sync and guard bands.
+
+The AVI InfoFrame declares full-range RGB (`RGB_QUANTIZATION_RANGE = 2'b01`,
+set in `maps_hdmi.sv` and carried through `hdmi.sv` and `packet_picker.sv`,
+whose defaults are unchanged). The first hardware capture is why: the sink read
+the RGB as limited range, so index 236 arrived as 255 and everything above it
+clipped to white. `sim/tb_avi_range.sv` builds the packet both ways and checks
+the field by byte, since a field in the wrong bit position still looks set in
+the source.
 
 `sim/tb_hdmi_encode.sv` drives the three channels through every coding mode and
 `tools/check_tmds.py` recomputes the stream, discovering the output delay by

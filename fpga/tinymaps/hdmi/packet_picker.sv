@@ -6,6 +6,9 @@ module packet_picker
     parameter int VIDEO_ID_CODE = 4,
     parameter real VIDEO_RATE = 0,
     parameter bit IT_CONTENT = 1'b0,
+    // TinyMaps change: carried out to the AVI InfoFrame so the core can declare
+    // the RGB quantization range it actually emits.  Default unchanged.
+    parameter bit [1:0] RGB_QUANTIZATION_RANGE = 2'b00,
     parameter int AUDIO_BIT_WIDTH = 0,
     parameter int AUDIO_RATE = 0,
     parameter bit [8*8-1:0] VENDOR_NAME = 0,
@@ -140,7 +143,8 @@ audio_sample_packet #(.SAMPLING_FREQUENCY(SAMPLING_FREQUENCY), .WORD_LENGTH({{WO
 
 auxiliary_video_information_info_frame #(
     .VIDEO_ID_CODE(7'(VIDEO_ID_CODE)),
-    .IT_CONTENT(IT_CONTENT)
+    .IT_CONTENT(IT_CONTENT),
+    .RGB_QUANTIZATION_RANGE(RGB_QUANTIZATION_RANGE)
 ) auxiliary_video_information_info_frame(.header(headers[130]), .sub(subs[130]));
 
 

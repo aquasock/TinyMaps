@@ -367,3 +367,38 @@ Two decisions stand between this and a real map. First, declare `RGB_QUANTIZATIO
 - User Test: PASS
 
 ---
+
+## 11 COMMIT Unreleased 2026-10-26T10:37:15-07:00
+
+#### Coming From:
+
+Unreleased 2f29ebd
+
+#### Purpose:
+
+Declare full-range RGB in the AVI InfoFrame, which is the cause the first hardware capture pointed at, and land it on its own before any palette work.
+
+#### Outcome:
+
+`RGB_QUANTIZATION_RANGE` is now `2'b01` in the AVI InfoFrame the core emits. The field is carried as a parameter through `packet_picker.sv` and `hdmi.sv`, both of which keep their upstream default of `2'b00`, and set to full range in `maps_hdmi.sv`, which is this project's wrapper and the right place for the decision; the new `sim/tb_avi_range.sv` instantiates the packet module both ways and checks it by byte, which caught nothing in the RTL but did catch two mistakes in the test itself, a checksum read at time zero and a comparison that expected the checksum byte to stay put while the packet changed. Byte 3 now reads `1000_0100`: IT content set, extended colorimetry clear, quantization range `01`, non-uniform scaling clear, and both packets sum to zero over their fourteen payload bytes and three header bytes. The core builds at placement seed 1 to `tinymaps.a54a650eae81.bin` (`tinymaps.b6617c41c4a9.fs`, 35,326,437 bytes for the `.fs`) with `hclk` at 89.45 MHz against 74.25 and `clk` at 470.15 against 21.49, setup=0 and hold=0. Every testbench passes: `tb_avi_range`, `tb_maps_uart`, `tb_maps_link_rx`, `tb_maps_render` with `check_render` matching all five viewports, and `tb_hdmi_encode` with `check_tmds`. Deployment did not run: the Tang is not connected to this machine, `/dev/ttyACM0` is absent, so `tangput` could not open the port and nothing was sent to the board. That leaves the change unverified on hardware, and until it is measured the lift and clip remain the last observed behaviour of the picture: the prediction is that index 236 arrives as 236 rather than 255, and the way to test it is to reload `work/test/test-image.bin` after programming this build and measure a capture the way the previous one was measured. The vendored HDMI tree now carries two deliberate departures from upstream, the `tmds_channel` pipeline and this parameter, and both are recorded in `README.md`, the second with its default left alone so the modules still behave upstream's way for anyone else. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy `tinymaps.a54a650eae81.bin` when the board is connected, reload `work/test/test-image.bin`, and measure a capture: index 236 should read 236 and the staircase should show its full range instead of saturating to white above about 235. If that holds, the pack's palette is the last piece before a real map, and it needs a decision on how the loader supplies 256 entries, since the fabric ramp is initialised by the top and has no second writer today. After that, a level selector that holds `step` inside `(0.5, 1]` across the pack's four levels, and the first load of the full 28 MB pack.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/hdmi/hdmi.sv
+- fpga/tinymaps/hdmi/packet_picker.sv
+- fpga/tinymaps/maps_hdmi.sv
+- sim/tb_avi_range.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

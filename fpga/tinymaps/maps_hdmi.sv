@@ -26,6 +26,11 @@ assign audio_sample_word[1] = 16'd0;
 
 hdmi #( .VIDEO_ID_CODE(VIDEOID), .DVI_OUTPUT(0), .VIDEO_REFRESH_RATE(60.0),
         .IT_CONTENT(1), .AUDIO_RATE(44100), .AUDIO_BIT_WIDTH(16),
+        // Full-range RGB: the palette and the image data are 0-255, and with
+        // the default (limited range) the sink lifted every level and clipped
+        // everything above about 235 to white.  Measured on the Tang
+        // 2026-10-26: index 236 arrived as 255, index 107 as 111.
+        .RGB_QUANTIZATION_RANGE(2'b01),
         .START_X(0), .START_Y(0) )
 u_hdmi (
     .clk_pixel_x5(clk_5x_pixel),
