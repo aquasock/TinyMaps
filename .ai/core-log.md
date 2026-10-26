@@ -265,3 +265,34 @@ Wire the pack loader: `sdram_ctrl`'s A25 write port is idle and the viewport reg
 - User Test: NOT RUN
 
 ---
+
+## 8 COMMIT Unreleased 2026-10-26T09:47:51-07:00
+
+#### Coming From:
+
+Unreleased 1342a0e
+
+#### Purpose:
+
+Deploy the packed bitstream to the Tang and have it tested on hardware, which entry 7 left undone.
+
+#### Outcome:
+
+The bitstream from entry 7 was put on the Tang's SD card with TinyTang's `tangput` at `/root/cores/console138k/tinymaps.bin`, 4,399,798 bytes, the same `sha256 46bc5de68231` that names it, and the size was read back from the card before programming. `tangload /root/cores/console138k/tinymaps.bin` from the board's shell reported `ID=0001081b`, an erase poll that came back OK, `Load SRAM` and `tangload: core loaded`; after the user power cycled the board the image survived on the card and a second `tangload` produced the same sequence, so the deployment is repeatable and the load is volatile, a power cycle returning the console core without anything on the card having been overwritten. The shell's `fpga` command reports no answer on UART1 at 2000000 baud, which is expected rather than a fault: `maps_link_rx` is not instantiated and the top has no UART responder, so the link cannot answer yet. The user reports a locked, synced, still image of noise static and judges it working, and that is exactly what this design draws with no pack loaded, a palette lookup over SDRAM that holds nothing, so the frame being stable rather than flickering is the meaningful part of the result. HDMI locking 1280x720p60, the PLL and divider topology, and `hclk` closing at 74.25 MHz on silicon are now hardware-confirmed rather than model claims. What is not confirmed is anything past the palette: no known image has been sent through the renderer's line buffers, so the noise proves the path runs and stays stable, not that it indexes correctly. No build ran in this cycle; the image deployed is the artefact entry 7 built and verified, uploaded hash for hash, so the build stage belongs to that entry and passed there. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Wire the pack loader, which is now also the only way to prove the picture path: a UART receiver and the `0xAA` frame parser in front of the finished `maps_link_rx`, the loader writing through `sdram_ctrl`'s idle A25 write port, and an arbitration rule for how the loader and the renderer share the SDRAM. Send a known pack through it and compare the screen against the pack's own preview, then add the level selector that keeps `step` inside `(0.5, 1]` and measure whether the SDRAM delivers a 1284-entry row inside a 1650-clock line with real data.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

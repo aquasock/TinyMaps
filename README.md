@@ -10,8 +10,11 @@ and the apicula fork).
 
 Phases 0 to 3 are done and verified by simulation. The integration is written
 and **closes timing**: `hclk` reaches 84.28 MHz against the 74.25 MHz a 720p
-line needs, at placement seed 1, so the flow packs a bitstream. Nothing has been
-deployed. `docs/HANDOFF.md` holds the state, the decisions and the next action;
+line needs, at placement seed 1, so the flow packs a bitstream. That bitstream
+was deployed on 2026-10-26 and runs on the Tang: HDMI locks 1280x720p60 and the
+picture is stable, which is what the design draws with no pack loaded -- the
+palette over empty SDRAM. The loader is not wired, so there is no map yet.
+`docs/HANDOFF.md` holds the state, the decisions and the next action;
 `docs/integration-blocker.md` holds the timing measurements, the fix and the
 levers that were ruled out.
 

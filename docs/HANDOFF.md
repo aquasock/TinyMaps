@@ -1,15 +1,15 @@
 # Handoff — TinyMaps — 2026-10-26
 
 - **State:** Phases 0–3 are done and verified by simulation. Phase 4 (integration)
-  is written, **closes timing** and packs a bitstream. Nothing has ever been
-  deployed to the Tang: the user has not asked for it and previous cycles
-  deferred it.
+  is written, **closes timing**, packs a bitstream, and that bitstream has run
+  on the Tang: 1280x720p60 locks and the picture is stable. The loader is not
+  wired, so what it draws is the palette over empty SDRAM, not a map.
 
 - **Landed:** `79bd168` scaffold + pack builder · `1e1de8f` Phase 0 skeleton ·
   `2e8ea8e` Phase 2 load receiver (5 sim cases pass) · `dbcf8e1` Phase 3 nearest
   renderer (3 pixel-exact cases) · `ad099df` bilinear + three row buffers ·
   `2107fae` row reuse across the magnifying range · `5e4db16`, `2a32611` blocker
-  records · `32a8219` integration, committed with timing open · this cycle:
+  records · `32a8219` integration, committed with timing open · `1342a0e`
   encoder pipeline, timing closed at `hclk` 84.28 MHz.
 
 - **Branches/PRs:** none. Everything is on `main`, which is the only branch.
@@ -22,6 +22,14 @@
   an empty `build/` to the same hashes twice. `hclk` 84.28 MHz against 74.25,
   `clk` 428.08 against 21.49, setup=0 hold=0. Gitignored, rebuild with
   `tools/build_maps_core_open.sh`.
+
+- **On the Tang:** that `.bin` is on the card at
+  `/root/cores/console138k/tinymaps.bin` (uploaded with TinyTang's `tangput`,
+  size confirmed on the card). Program it over the board's JTAG with
+  `tangload /root/cores/console138k/tinymaps.bin` from the shell or with
+  `TinyTang/tools/tinytang_run.py`. `tangload` reports `ID=0001081b` and
+  `Load SRAM`, so it is volatile: a power cycle returns the console core.
+  Deployed and confirmed on 2026-10-26.
 
 - **Decisions that must not be re-litigated:**
   - **Fabric-only loader, no AE350.** The load is a memcpy with a checksum; an
@@ -57,8 +65,13 @@
   The Phoenix pack is at `work/pack/phoenix-18km.tmpk` (gitignored, 28.00 MiB,
   rebuilt by `tools/maps_pack.py`); tiles are cached in `~/.cache/tinymaps`.
 
-- **Unverified:** the integrated design has never run on hardware. HDMI output,
-  the SDRAM read path, the line buffers and the timing margin are all model
-  claims until something is deployed. The renderer's real-time claim is by
-  construction, not measured: whether the SDRAM delivers a 1284-entry row inside
-  a 1650-clock line is still an integration question.
+- **Unverified:** what the SDRAM holds. Nothing has sent a known image, so the
+  picture path past the palette is unproven: the screen shows a locked, stable
+  field of noise, which is the expected result of a palette lookup over
+  uninitialised memory and is not evidence that the renderer is indexing
+  correctly. The link is silent too -- `fpga` on the shell reports no answer on
+  UART1 because no UART responder exists yet. HDMI, the clock topology and the
+  fact that the design runs at 74.25 MHz on silicon are now hardware-confirmed;
+  the renderer's real-time claim is still by construction, not measured, since
+  whether the SDRAM delivers a 1284-entry row inside a 1650-clock line has not
+  been exercised with real data either.
