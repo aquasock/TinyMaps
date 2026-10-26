@@ -229,3 +229,39 @@ Put a register between `q_m` and the disparity accumulator in `fpga/tinymaps/hdm
 - User Test: NOT RUN
 
 ---
+
+## 7 COMMIT Unreleased 2026-10-26T09:37:00-07:00
+
+#### Coming From:
+
+Unreleased 32a8219
+
+#### Purpose:
+
+Close the pixel clock by pipelining the HDMI encoder, and prove the pipelining does not change a single coded word.
+
+#### Outcome:
+
+`fpga/tinymaps/hdmi/tmds_channel.sv` gained one pipeline register between the first half of HDMI 1.4a section 5.4.4.1 and the disparity decision: the coded byte `q_m` is registered together with `mode`, `control_data` and `data_island_data`, and `N1q_m07`/`N0q_m07`, the accumulator branch and the accumulator reset are all taken from the registered values. All five signals are delayed together on purpose, because the guard bands and control periods are keyed off the same mode the data was coded under and delaying the video alone would shift the picture one pixel against its own sync. A new `sim/tb_hdmi_encode.sv` drives the three channels through every coding mode -- all 256 input bytes four times over, every control word, all sixteen TERC4 symbols, both guard bands and 2000 cycles of interleaved pseudo-random mode, pixel, island and control words -- and dumps the 10-bit word per channel per pixel clock, and `tools/check_tmds.py` recomputes that stream from the coding tables and discovers the output delay by alignment instead of assuming it. The capture taken before the change matches the model over all 3132 rows at a delay of zero; the capture taken after matches over 3131 rows at a delay of one; and the two captures are identical row for row once the one-pixel offset is compensated, so the encoder emits exactly the words it emitted before, one clock later. The core builds at placement seed 1 to `tinymaps.46bc5de68231.bin` (`tinymaps.46f5c35cbda5.fs`, 4,399,798 and 35,221,304 bytes) with `hclk` at 84.28 MHz against 74.25 and `clk` at 428.08 against 21.49, setup=0 and hold=0, and a rebuild from an empty `build/` reproduced both hashes. The critical path left the encoder entirely: it is now 11.87 ns in the renderer's line buffer, leaving 1.6 ns inside a 74.25 MHz period, and the post-placement `hclk` estimate of 76.93 MHz was improved on by routing rather than eroded. The pipelining was the route the blocker record had already reduced to, after nine levers failed to make ABC stop merging the serialiser's multiplexers into the disparity path; a register between `q_m` and the accumulator cuts that merged cone at a flop, which ABC cannot retime across. One thing was found and deliberately not changed: comparing the encoder against a transcription of Figure 5-7 showed the balanced-disparity branch pairs `q_m[8]` with the uncomplemented byte where the transcription pairs it with the complemented one, and both pairings keep the accumulator tracking the true disparity and produce decodable words, so it is a DC-balance convention rather than a visible defect. The vendored file is byte-identical to upstream `hdl-util/hdmi` at `src/tmds_channel.sv` on master, so the convention is upstream's, and settling which pairing the standard mandates needs the specification text that `core-reference.md` does not carry; it is recorded as an open question in `docs/integration-blocker.md` and the checker reproduces the module's convention rather than asserting conformance. All three testbenches pass: `tb_maps_link_rx`, `tb_maps_render` with `check_render` matching all five viewports pixel for pixel, and `tb_hdmi_encode` with `check_tmds`. Deployment and user test did not run because this cycle was scoped to the build with deployment deferred by the user's instruction, so no bitstream has touched the board and the integrated design remains unverified on hardware. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Wire the pack loader: `sdram_ctrl`'s A25 write port is idle and the viewport registers in `tinymaps_top.sv` are constants, so the SDRAM holds nothing and the picture is the default palette over empty memory. That needs a UART receiver and the `0xAA` frame parser in front of the finished `maps_link_rx`, the loader writing through the idle write port, and an arbitration rule for how the loader and the renderer share the SDRAM. Then a level selector that keeps `step` inside `(0.5, 1]`, and a decision from the user on whether the packed bitstream should be deployed.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- docs/integration-blocker.md
+- fpga/tinymaps/hdmi/tmds_channel.sv
+- sim/tb_hdmi_encode.sv
+- tools/check_tmds.py
+- tools/run_sim.sh
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

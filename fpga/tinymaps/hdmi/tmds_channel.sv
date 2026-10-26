@@ -27,12 +27,57 @@ logic [9:0] video_coding;
 assign video_coding = q_out;
 
 logic [3:0] N1D;
+
+integer i;
+
+// Section 5.4.4.1, first half: the input byte and its transition-minimised
+// form, q_m[8] naming which of the two chains produced it.  Nothing downstream
+// is decided here, so this stage stands alone in front of the pipeline register.
+always_comb
+begin
+    N1D = video_data[0] + video_data[1] + video_data[2] + video_data[3] + video_data[4] + video_data[5] + video_data[6] + video_data[7];
+    if (N1D > 4'd4 || (N1D == 4'd4 && video_data[0] == 1'd0))
+    begin
+        q_m[0] = video_data[0];
+        for(i = 0; i < 7; i++)
+            q_m[i + 1] = q_m[i] ~^ video_data[i + 1];
+        q_m[8] = 1'b0;
+    end
+    else
+    begin
+        q_m[0] = video_data[0];
+        for(i = 0; i < 7; i++)
+            q_m[i + 1] = q_m[i] ^ video_data[i + 1];
+        q_m[8] = 1'b1;
+    end
+end
+
+// Pipeline register between the coding of the byte and the disparity decision.
+// The coded byte and the mode that selected it advance together: the guard band
+// and control periods are keyed off the same mode the data was coded under, so
+// delaying one without the other would shift the video against its own framing.
+// Every mode therefore gains one pixel of latency and the stream keeps its
+// internal alignment.
+logic [8:0] q_m_q;
+logic [3:0] island_q;
+logic [1:0] control_q;
+logic [2:0] mode_q;
+
+always_ff @(posedge clk_pixel)
+begin
+    q_m_q     <= q_m;
+    island_q  <= data_island_data;
+    control_q <= control_data;
+    mode_q    <= mode;
+end
+
+// Section 5.4.4.1, second half: the counts and the disparity decision, from the
+// registered byte.
 logic signed [4:0] N1q_m07;
 logic signed [4:0] N0q_m07;
 always_comb
 begin
-    N1D = video_data[0] + video_data[1] + video_data[2] + video_data[3] + video_data[4] + video_data[5] + video_data[6] + video_data[7];
-    case(q_m[0] + q_m[1] + q_m[2] + q_m[3] + q_m[4] + q_m[5] + q_m[6] + q_m[7])
+    case(q_m_q[0] + q_m_q[1] + q_m_q[2] + q_m_q[3] + q_m_q[4] + q_m_q[5] + q_m_q[6] + q_m_q[7])
         4'b0000: N1q_m07 = 5'sd0;
         4'b0001: N1q_m07 = 5'sd1;
         4'b0010: N1q_m07 = 5'sd2;
@@ -49,59 +94,43 @@ end
 
 logic signed [4:0] acc_add;
 
-integer i;
-
 always_comb
 begin
-    if (N1D > 4'd4 || (N1D == 4'd4 && video_data[0] == 1'd0))
-    begin
-        q_m[0] = video_data[0];
-        for(i = 0; i < 7; i++)
-            q_m[i + 1] = q_m[i] ~^ video_data[i + 1];
-        q_m[8] = 1'b0;
-    end
-    else
-    begin
-        q_m[0] = video_data[0];
-        for(i = 0; i < 7; i++)
-            q_m[i + 1] = q_m[i] ^ video_data[i + 1];
-        q_m[8] = 1'b1;
-    end
     if (acc == 5'sd0 || (N1q_m07 == N0q_m07))
     begin
-        if (q_m[8])
+        if (q_m_q[8])
         begin
             acc_add = N1q_m07 - N0q_m07;
-            q_out = {~q_m[8], q_m[8], q_m[7:0]};
+            q_out = {~q_m_q[8], q_m_q[8], q_m_q[7:0]};
         end
         else
         begin
             acc_add = N0q_m07 - N1q_m07;
-            q_out = {~q_m[8], q_m[8], ~q_m[7:0]};
+            q_out = {~q_m_q[8], q_m_q[8], ~q_m_q[7:0]};
         end
     end
     else
     begin
         if ((acc > 5'sd0 && N1q_m07 > N0q_m07) || (acc < 5'sd0 && N1q_m07 < N0q_m07))
         begin
-            q_out = {1'b1, q_m[8], ~q_m[7:0]};
-            acc_add = (N0q_m07 - N1q_m07) + (q_m[8] ? 5'sd2 : 5'sd0);
+            q_out = {1'b1, q_m_q[8], ~q_m_q[7:0]};
+            acc_add = (N0q_m07 - N1q_m07) + (q_m_q[8] ? 5'sd2 : 5'sd0);
         end
         else
         begin
-            q_out = {1'b0, q_m[8], q_m[7:0]};
-            acc_add = (N1q_m07 - N0q_m07) - (~q_m[8] ? 5'sd2 : 5'sd0);
+            q_out = {1'b0, q_m_q[8], q_m_q[7:0]};
+            acc_add = (N1q_m07 - N0q_m07) - (~q_m_q[8] ? 5'sd2 : 5'sd0);
         end
     end
 end
 
-always_ff @(posedge clk_pixel) acc <= mode != 3'd1 ? 5'sd0 : acc + acc_add;
+always_ff @(posedge clk_pixel) acc <= mode_q != 3'd1 ? 5'sd0 : acc + acc_add;
 
 // See Section 5.4.2
 logic [9:0] control_coding;
 always_comb
 begin
-    unique case(control_data)
+    unique case(control_q)
         2'b00: control_coding = 10'b1101010100;
         2'b01: control_coding = 10'b0010101011;
         2'b10: control_coding = 10'b0101010100;
@@ -113,7 +142,7 @@ end
 logic [9:0] terc4_coding;
 always_comb
 begin
-    unique case(data_island_data)
+    unique case(island_q)
         4'b0000 : terc4_coding = 10'b1010011100;
         4'b0001 : terc4_coding = 10'b1001100011;
         4'b0010 : terc4_coding = 10'b1011100100;
@@ -148,16 +177,18 @@ generate
     if (CN == 1 || CN == 2)
         assign data_guard_band = 10'b0100110011;
     else
-        assign data_guard_band = control_data == 2'b00 ? 10'b1010001110
-            : control_data == 2'b01 ? 10'b1001110001
-            : control_data == 2'b10 ? 10'b0101100011
+        assign data_guard_band = control_q == 2'b00 ? 10'b1010001110
+            : control_q == 2'b01 ? 10'b1001110001
+            : control_q == 2'b10 ? 10'b0101100011
             : 10'b1011000011;
 endgenerate
 
-// Apply selected mode.
+// Apply selected mode.  mode_q selects it: the video word, the guard bands and
+// the control and island periods all belong to the pixel that was captured one
+// clock earlier, so they are chosen with the mode it was captured under.
 always @(posedge clk_pixel)
 begin
-    case (mode)
+    case (mode_q)
         3'd0: tmds <= control_coding;
         3'd1: tmds <= video_coding;
         3'd2: tmds <= video_guard_band;

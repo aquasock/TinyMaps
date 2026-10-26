@@ -36,4 +36,12 @@ if [[ -z "$*" || " $* " == *" tb_maps_render "* ]]; then
         python3 tools/check_render.py || rc=1
     fi
 fi
+
+# likewise the encoder testbench: it only captures the coded stream
+if [[ -z "$*" || " $* " == *" tb_hdmi_encode "* ]]; then
+    if [[ -f build/sim/tmds_dump.txt ]]; then
+        echo "=== check_tmds ==="
+        python3 tools/check_tmds.py || rc=1
+    fi
+fi
 exit $rc

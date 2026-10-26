@@ -9,10 +9,11 @@ and the apicula fork).
 ## State
 
 Phases 0 to 3 are done and verified by simulation. The integration is written
-and committed but **does not close timing** -- `hclk` reaches 66.16 MHz against
-the 74.25 MHz a 720p line needs -- so no bitstream exists and nothing has been
-deployed. `docs/integration-blocker.md` holds the measurements;
-`docs/HANDOFF.md` holds the state, the decisions and the next action.
+and **closes timing**: `hclk` reaches 84.28 MHz against the 74.25 MHz a 720p
+line needs, at placement seed 1, so the flow packs a bitstream. Nothing has been
+deployed. `docs/HANDOFF.md` holds the state, the decisions and the next action;
+`docs/integration-blocker.md` holds the timing measurements, the fix and the
+levers that were ruled out.
 
 ## Building
 
@@ -27,11 +28,12 @@ GW5AST-138C database, and the apicula fork. The defaults are this machine's:
 The flow refuses to pack a netlist with setup or hold violations. Artefacts
 land in `build/tinymaps/open-s<seed>/`, named after their own sha256 prefix.
 
-`fpga/tinymaps/tinymaps_top.sv` is a skeleton: clocks, 720p HDMI, and a colour
-bar pattern. The load receiver `maps_link_rx.sv` and the renderer
-`maps_render.sv` are written and proven in simulation, and `sdram_ctrl.sv` (vended
-from TinyNES's `ahb_sdram.sv`, renamed only) is the SDRAM engine. None of the
-three is instantiated yet.
+`fpga/tinymaps/tinymaps_top.sv` carries the renderer `maps_render.sv`, its row
+adapter `maps_video_rd.sv`, the SDRAM engine `sdram_ctrl.sv` (vended from
+TinyNES's `ahb_sdram.sv`, renamed only) and the HDMI stage `maps_hdmi.sv`. The
+load receiver `maps_link_rx.sv` is written and proven in simulation but is not
+instantiated: the write port is idle, the viewport registers are constants, and
+the picture is the default palette over empty memory.
 
 ## Simulation
 
@@ -39,7 +41,26 @@ three is instantiated yet.
     tools/run_sim.sh tb_maps_link_rx
 
 Verilator `--binary --timing`; each testbench prints `RESULT: PASS` or
-`RESULT: FAIL` and the script's exit code follows it.
+`RESULT: FAIL` and the script's exit code follows it. Two testbenches only
+capture data, and their captures are judged afterwards by a separate checker:
+`tools/check_render.py` for the emitted pixels and `tools/check_tmds.py` for the
+coded TMDS stream.
+
+## HDMI encoder
+
+`fpga/tinymaps/hdmi/tmds_channel.sv` pipelines section 5.4.4.1: the coded byte
+`q_m` is registered together with `mode`, `control_data` and `data_island_data`,
+and the disparity decision is taken from the registered byte. The register is
+what lets `hclk` close -- ABC had merged the serialiser's multiplexers into the
+encoder's disparity path -- and it costs one pixel of latency, shared by every
+mode so the picture does not shift against its own sync and guard bands.
+
+`sim/tb_hdmi_encode.sv` drives the three channels through every coding mode and
+`tools/check_tmds.py` recomputes the stream, discovering the output delay by
+alignment rather than assuming it. It reproduces the module's own coding
+conventions and gates the stream as a regression check; it is not a conformance
+claim, and the one known difference from a Figure 5-7 transcription is recorded
+in `docs/integration-blocker.md`.
 
 ## Load receiver
 
