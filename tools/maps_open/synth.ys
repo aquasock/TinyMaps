@@ -72,6 +72,7 @@ read_slang --std 1800-2017 -U SYNTHESIS \
     src/tinymaps/pll/gowin_pll_hdmi.v \
     src/tinymaps/pll/gowin_pll_nes.v \
     src/tinymaps/tinymaps_top.sv \
+    src/tinymaps/maps_link_rx.sv \
     src/tinymaps/hdmi/audio_clock_regeneration_packet.sv \
     src/tinymaps/hdmi/audio_info_frame.sv \
     src/tinymaps/hdmi/audio_sample_packet.sv \

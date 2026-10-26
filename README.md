@@ -26,7 +26,31 @@ The flow refuses to pack a netlist with setup or hold violations. Artefacts
 land in `build/tinymaps/open-s<seed>/`, named after their own sha256 prefix.
 
 `fpga/tinymaps/tinymaps_top.sv` is a skeleton: clocks, 720p HDMI, and a colour
-bar pattern. No map data path exists yet.
+bar pattern. The load receiver `maps_link_rx.sv` is written and proven in
+simulation but is not yet instantiated.
+
+## Simulation
+
+    tools/run_sim.sh                 # every sim/tb_*.sv
+    tools/run_sim.sh tb_maps_link_rx
+
+Verilator `--binary --timing`; each testbench prints `RESULT: PASS` or
+`RESULT: FAIL` and the script's exit code follows it.
+
+## Load receiver
+
+`maps_link_rx` takes the BL616's command `0x07` payload stream after
+`iosys_bl616`'s `0xAA` frame parser and runs TinyNES's load semantics with the
+destination being an SDRAM byte address:
+
+    header, 5 words little-endian
+      0 magic 'TML1' (0x314c4d54)   1 SDRAM byte address (8-byte aligned)
+      2 length                      3 image CRC-32 (complemented)
+      4 header CRC-32 over the first 16 bytes (complemented)
+    then ceil(length / 8192) blocks, each up to 8192 bytes + its CRC-32
+
+Answered ACK 0x06 or NAK 0x15 then a letter: 'H' header CRC, 'C' block CRC,
+'I' image CRC, 'T' timeout. A NAKed block is re-sent from its own address.
 
 ## Map packs
 
