@@ -16,8 +16,8 @@
 
 module tb_maps_tiles;
 
-localparam int SLOTS = 512;
-localparam int TBITS = 15;
+localparam int SLOTS = 256;
+localparam int TBITS = 16;   // 64 KiB tiles
 localparam int POOL  = 32'h0010_0000;
 
 reg clk = 1'b0;

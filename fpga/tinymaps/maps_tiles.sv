@@ -1,6 +1,7 @@
 // The tile page table: which tile is in which slot of the pool.
 //
-// A tile is 256 by 256 pixels at four bits, 32 KiB, and a slot is one tile.  The
+// A tile is 256 by 256 pixels, 64 KiB at one byte a pixel, and a slot is one
+// tile: 256 slots is 16 MiB of the dock's 32.  The
 // pool is addressed by slot, so the fetch engine asks this module "where is tile
 // (level, tx, ty)?" and gets a byte address or a miss.
 //
@@ -28,9 +29,9 @@
 `timescale 1ns / 1ps
 
 module maps_tiles #(
-    parameter int SLOTS     = 512,          // tiles the pool holds
-    parameter int TBYTES    = 32768,        // bytes in one tile
-    parameter int TBITS     = 15,           // log2 of TBYTES
+    parameter int SLOTS     = 256,          // tiles the pool holds
+    parameter int TBYTES    = 65536,        // bytes in one tile: 256x256 at 8bpp
+    parameter int TBITS     = 16,           // log2 of TBYTES
     parameter int POOL_BASE = 32'h0010_0000 // where the pool starts in SDRAM
 ) (
     input  wire        clk,

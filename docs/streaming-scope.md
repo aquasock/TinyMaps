@@ -192,7 +192,16 @@ testbench than from a rebuilt renderer.
   many entries run to the tile boundary.  Absolute, not a stride from the window
   start: chunks break on the tile grid, so a fixed stride disagrees with it at
   every boundary but the first.
-- **Next: the chunked fetch in the renderer**, then the request protocol and the
+- **Done: the chunk sequence** (`maps_tile_fetch.sv`) -- one window of a source
+  row walked in chunks that each stay inside a tile, looked up per chunk, with a
+  miss reported rather than papered over.  The page table's answer is two cycles
+  behind its question, so the sequence has a lookup and a wait state between
+  chunks; that is the whole cost of tiling on the fetch side.
+- **Corrected: a tile is 64 KiB, not 32.** A 256-pixel row is 256 bytes and there
+  are 256 rows, so 8bpp tiles are 64 KiB and a 16 MiB pool is 256 slots.  Both the
+  page table and the fetch testbench had it as 32 KiB, and the testbench caught it
+  by reading a tile offset out of range.
+- **Next: wire the sequence into `maps_render`**, then the request protocol and the
   TinyTang tile server, then prefetch, eviction and the fallback, then 4bpp in the
   pixel path.
 

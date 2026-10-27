@@ -1045,3 +1045,37 @@ The chunked fetch in `maps_render`: `f_base` and `f_cnt` become per-chunk quanti
 - User Test: N/A
 
 ---
+
+## 31 COMMIT Unreleased 2026-10-26T23:35:18-07:00
+
+#### Coming From:
+
+Unreleased 5a7861d
+
+#### Purpose:
+
+Build the chunk sequencer that turns one window of a source row into per-tile reads, and correct the tile geometry it exposed, still without editing the renderer that works.
+
+#### Outcome:
+
+`fpga/tinymaps/maps_tile_fetch.sv` takes a request -- one source row, a starting entry and a span -- and walks it in chunks that each stay inside one tile: it asks the page table where the entry lives, reads that chunk from the pool through the same `rd_start`/`rd_addr`/`rd_count` protocol the renderer already speaks, and writes each entry to the caller's row buffer in window order. A tile that is not resident raises `miss` and stops the sequence rather than papering over it, because this module owns the sequence and not the policy of what to do about a miss. Two details came out of building it. The page table's answer is two cycles behind its question -- it registers the lookup and then registers the verdict -- so the sequence needs a lookup state and a wait state between chunks, and the first version's single-state wait read a stale hit. And the expensive part of the change turned out to be a mistake of mine rather than of the design: **a tile is 64 KiB, not 32**. A 256-pixel row is 256 bytes and there are 256 rows, so at 8bpp a tile is 65536 bytes and a 16 MiB pool is 256 slots, not 512. Both the page table and the fetch testbench had been written as 32 KiB, and the testbench caught it by decoding a tile offset as out of range and reading the wrong slot. The fetch testbench models the pool so that every entry reads back as {tile x ^ row inside the tile, tile y ^ entry inside the tile}, using the slot-to-tile mapping the table handed out at lookup, and compares the whole 644-entry window against values computed the same way from the level coordinate -- so a chunk that starts at the right tile but the wrong row, or advances by the wrong amount, reads back as a number that names which of those is wrong instead of looking plausible. It caught three of my own errors: the model's tile stride was 4 KiB so it truncated the offset, the state constant for the wait state was written `2'd4` in a two-bit register and would have aliased to idle, and the expected-value function concatenated two 32-bit integers into sixteen bits, which keeps the wrong half. Both new testbenches pass, the page table's own test still passes at the corrected geometry, and the full suite is sixteen of sixteen. Nothing was built or deployed: these are modules and testbenches, not yet instantiated in the top, so the board is untouched on `tinymaps.ac916e42ed71`. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Wire the sequencer into `maps_render`, which is the first change to the module that works: the fetch engine's `f_base` and `f_cnt` become the sequencer's request, its `f_ack` becomes the sequencer's `done`, and a `miss` needs a decision -- ask for the tile and retry the line, or draw that line from the coarser level. The renderer testbench and `check_render` are the gate: a tile-mapped run must produce the same pixels as the linear one when every tile is resident, which is a test that can be written before the wiring is trusted.
+
+#### Files Modified:
+
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_tile_fetch.sv
+- fpga/tinymaps/maps_tiles.sv
+- sim/tb_maps_tile_fetch.sv
+- sim/tb_maps_tiles.sv
+
+#### Status:
+
+- Build: N/A
+- Deployment: N/A
+- User Test: N/A
+
+---
