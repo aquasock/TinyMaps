@@ -1190,3 +1190,39 @@ Give the pool a home and put the page table in the top: reserve the part of the 
 - User Test: NOT RUN
 
 ---
+
+## 35 COMMIT Unreleased 2026-10-27T07:45:54-07:00
+
+#### Coming From:
+
+Unreleased 585727a
+
+#### Purpose:
+
+Give the tile pool a home in the SDRAM that nothing else writes, put the page table in the top, and turn the tile command on so the protocol is live on the board rather than only in a testbench.
+
+#### Outcome:
+
+The pack's last level ends at `0x01B9DBD8`, 27.62 MiB into a 32 MiB part, so the pool takes the four megabytes above 28: `POOL_BASE = 0x01C0_0000`, 64 slots of 64 KiB, ending exactly at the top. That is sixteen slots more than a 1280x720 screen at z15 needs counting partials, which leaves room for a prefetch to be ahead of the picture, and it is a region nothing else writes -- which is what makes accepting tiles safe. `tinymaps_top` now instantiates `maps_tiles` with the loader's fill ports and passes `TILES` as 1, so a tile the host sends lands in that region and is committed to the table. Nothing looks a tile up yet because the renderer still fetches linearly, so the table answers the loader and remembers. Three things came out of building it. `sim/tb_maps_link_rx.sv` had been answering the loader's `fill_addr` with a formula of its own instead of using the page table, which is the mistake this project has now made twice -- a model that behaves better than the module hides the module's bug -- so the bench instantiates the real table and now checks that a committed tile is a hit at the address its blocks went to. That change exposed a latent defect in the bench itself: `send_byte` drove `rx_valid` with blocking assignments in the clock edge's own time step, so roughly one byte in a thousand was lost, and a lost byte turns the next frame into a resync through the payload; it was invisible until the extra instance changed the order Verilator ran its processes in. The wire is driven between edges now, and the response guard, which was 20,000 clocks against a frame that takes 104,000 to send, was letting the bench compare the next test's reply. The third was real: `slot_of` computed `ty * 31` as a multiply, which cost nothing while `fill_addr` was a register, but the loader takes the address before the bytes arrive, so the multiply became combinational into the SDRAM controller's address mux. It took the design from 84.35 MHz at seed 1 to 70.15 and failed seven of eight seeds; as a shift and a subtract it is the same hash and the same slots, and the sweep is 75.46 to 88.40 with all eight packing. Seventeen of seventeen testbenches pass with `check_render` and `check_tmds`. Nothing was deployed. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The renderer's miss has to reach `maps_tile_req` and the coarse-level fallback has to draw something while a tile is on its way, which is what makes the renderer's not retrying a missed row harmless; that means turning `TILED` on in the top and instantiating the sequencer beside the table. Then prefetch and eviction in the page table, which needs the pool to say when it is full, and 4bpp in the pixel path, which changes the tile packing and the pixel extractor rather than the fetch. The pool is also provisional: 4 MiB of a 32 MiB part is enough for a screen and a prefetch, not for the reach the streaming design is for, and getting that reach means the pack gives up its finest level to the card.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_tiles.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_link_rx.sv
+- tools/maps_open/synth.ys
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

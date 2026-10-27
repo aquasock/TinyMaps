@@ -83,7 +83,12 @@ wire [31:0] fill_tag = {14'd0, fill_level, fill_tx, fill_ty};
 function automatic [SW-1:0] slot_of(input [1:0] lvl, input [14:0] tx, input [14:0] ty);
     reg [21:0] h;
     begin
-        h = {7'd0, tx} + ({7'd0, ty} * 22'd31) + {20'd0, lvl};
+        // ty * 31 as a shift and a subtract.  It was written as a multiply, and
+        // that was free while `fill_addr` was a register; the loader now takes
+        // the address before the bytes arrive, so it is combinational and feeds
+        // the SDRAM controller's address mux, where a 22-bit multiplier is most
+        // of a clock period.  Same hash, same slots.
+        h = {7'd0, tx} + ({7'd0, ty} << 5) - {7'd0, ty} + {20'd0, lvl};
         slot_of = h[SW-1:0];
     end
 endfunction

@@ -36,20 +36,23 @@ wire [7:0]  last_nak;
 wire [15:0] overflows, timeouts;
 
 // ------------------------------------------------------------ the pool -----
-// The page table is not in this bench; what it does for the loader is answer
-// "where do these coordinates' bytes belong", so the bench answers with a
-// formula the checks can repeat.  The pool sits at 1.5 MiB, clear of the image
-// loads above.
+// The real page table, not a model of it: an earlier version of this bench
+// answered fill_addr with a formula of its own, which is the mistake the
+// sequencer's testbench made and this project has now made twice -- a model that
+// behaves better than the module hides the module's bug.  The pool sits at 1.5
+// MiB, clear of the image loads above, with a small slot count so the hash is
+// exercised rather than everything landing somewhere unique.
 localparam [24:0] TB_POOL = 25'h0018_0000;
+localparam int    TB_SLOTS = 8;
 wire [1:0]  fill_level;
 wire [14:0] fill_tx, fill_ty;
 wire        fill_commit;
-wire [4:0]  tb_slot = {2'd0, fill_tx[2:0]} ^ {2'd0, fill_ty[2:0]};
-wire [24:0] fill_addr = TB_POOL + ({20'd0, tb_slot} << 16);
+wire [24:0] fill_addr;
 
 reg         commit_seen = 0;
 reg  [1:0]  c_level = 2'd0;
 reg  [14:0] c_tx = 15'd0, c_ty = 15'd0;
+reg  [24:0] c_addr = 25'd0;
 integer     commits = 0;
 always @(posedge clk)
     if (fill_commit) begin
@@ -57,8 +60,42 @@ always @(posedge clk)
         c_level <= fill_level;
         c_tx    <= fill_tx;
         c_ty    <= fill_ty;
+        c_addr  <= fill_addr;
         commits <= commits + 1;
     end
+
+// the lookup side, so the bench can ask the table what it thinks it holds
+reg         lk_valid = 1'b0;
+reg  [1:0]  lk_level = 2'd0;
+reg  [14:0] lk_tx = 15'd0, lk_ty = 15'd0;
+wire        lk_hit;
+wire [24:0] lk_addr;
+
+maps_tiles #(.SLOTS(TB_SLOTS), .TBITS(16), .POOL_BASE(TB_POOL)) u_tiles (
+    .clk(clk), .resetn(resetn),
+    .lk_valid(lk_valid), .lk_level(lk_level), .lk_tx(lk_tx), .lk_ty(lk_ty),
+    .lk_hit(lk_hit), .lk_addr(lk_addr),
+    .fill_commit(fill_commit), .fill_level(fill_level),
+    .fill_tx(fill_tx), .fill_ty(fill_ty), .fill_addr(fill_addr),
+    .hits(), .misses(), .idle());
+
+// ask the table about a tile and take its answer two cycles later, which is the
+// latency it documents
+reg        hit_now = 1'b0;
+reg [24:0] hit_addr = 25'd0;
+task automatic lookup(input [1:0] lvl, input [14:0] tx, input [14:0] ty);
+begin
+    @(negedge clk);
+    lk_valid = 1'b1; lk_level = lvl; lk_tx = tx; lk_ty = ty;
+    @(posedge clk);
+    @(negedge clk);
+    lk_valid = 1'b0;
+    @(posedge clk);
+    #1;                                // the table's answer lands on that edge
+    hit_now  = lk_hit;
+    hit_addr = lk_addr;
+end
+endtask
 
 // the byte a tile holds at an offset, so the check and the sender agree
 function automatic [7:0] tile_byte_at(input integer a);
@@ -131,12 +168,19 @@ endfunction
 // ------------------------------------------------------------------ link ---
 reg [7:0] txbuf [0:16383];
 
+// Drive the wire between edges, never on one.  A blocking assignment that lands
+// in the same time step as the edge races the design's sample of it, and a byte
+// lost that way turns into a resync in the middle of the next frame -- which is
+// how this bench spent an afternoon blaming the page table.
 task send_byte(input [7:0] b);
     integer w;
     begin
-        rx_data = b; rx_valid = 1;
+        rx_data = b;
+        @(negedge clk);
+        rx_valid = 1'b1;
         @(posedge clk);
-        rx_valid = 0;
+        @(negedge clk);
+        rx_valid = 1'b0;
         for (w = 0; w < BYTE_GAP; w = w + 1) @(posedge clk);
     end
 endtask
@@ -184,7 +228,10 @@ task send_tile(input [1:0] lvl, input [14:0] tx, input [14:0] ty,
         if (corrupt) c = c ^ 32'h0000_0001;
         txbuf[9+cnt+0] = c[7:0];  txbuf[9+cnt+1] = c[15:8];
         txbuf[9+cnt+2] = c[23:16]; txbuf[9+cnt+3] = c[31:24];
+        $display("  [tb] send tile lvl %0d tx %0d ty %0d off %0d cnt %0d at %0t",
+                 lvl, tx, ty, off, cnt, $time);
         send_cmd(8'h1D, 0, 9 + cnt + 4);
+        $display("  [tb] tile frame sent at %0t", $time);
     end
 endtask
 
@@ -209,12 +256,16 @@ task put_word(input integer off, input [31:0] v);
 endtask
 
 integer errors = 0;
+// The guard has to outlast the biggest frame, not a round number: a 1024-byte
+// payload at this bench's hundred clocks a byte is 103,800 clocks, and a guard
+// shorter than that made this task time out and then quietly compare the *next*
+// test's response, which passed whenever the bytes happened to be identical.
 task expect_byte(input [7:0] want, input [127:0] what);
     integer guard;
     begin
         guard = 0;
-        while (resp_n == 0 && guard < 20000) begin @(posedge clk); guard = guard + 1; end
-        if (guard >= 20000) begin
+        while (resp_n == 0 && guard < 250000) begin @(posedge clk); guard = guard + 1; end
+        if (guard >= 250000) begin
             $display("FAIL: %0s: no response", what); errors = errors + 1;
         end else begin
             if (resp[0] !== want) begin
@@ -348,26 +399,38 @@ initial begin
     bad = 0;
     send_tile(2'd1, 15'd5, 15'd2, 0, 1024, 1'b0);
     expect_byte(8'h06, "tile block ACK");
-    for (n = 0; n < 1024; n = n + 1)
-        if (mem[TB_POOL + (5'd5 ^ 5'd2) * 65536 + n] !== tile_byte_at(n)) bad = bad + 1;
-    if (bad != 0) begin $display("FAIL: %0d of 1024 tile bytes wrong", bad); errors = errors + 1; end
-    else $display("PASS: 1024 tile bytes landed in the pool at the slot's address");
-    if (commits != 0) begin $display("FAIL: a middle block committed the tile"); errors = errors + 1; end
+    lookup(2'd1, 15'd5, 15'd2);
+    if (hit_now) begin $display("FAIL: a middle block made the tile resident"); errors = errors + 1; end
     else $display("PASS: a middle block does not make the tile resident");
+    #1;
+    for (n = 0; n < 1024; n = n + 1)
+        if (mem[fill_addr + n] !== tile_byte_at(n)) bad = bad + 1;
+    if (bad != 0) begin
+        $display("FAIL: %0d of 1024 tile bytes wrong", bad);
+        errors = errors + 1;
+    end else $display("PASS: the block landed where the table points for those coordinates");
 
     // 6. the block that ends the tile commits it, with the right coordinates
     $display("--- test 6: the last block commits the tile");
     bad = 0;
     send_tile(2'd1, 15'd5, 15'd2, 64512, 1024, 1'b0);
     expect_byte(8'h06, "last block ACK");
-    for (n = 0; n < 1024; n = n + 1)
-        if (mem[TB_POOL + (5'd5 ^ 5'd2) * 65536 + 64512 + n] !== tile_byte_at(64512 + n)) bad = bad + 1;
-    if (bad != 0) begin $display("FAIL: %0d of the last block's bytes wrong", bad); errors = errors + 1; end
-    else $display("PASS: the tile's last block landed");
     if (commits != 1 || c_level !== 2'd1 || c_tx !== 15'd5 || c_ty !== 15'd2) begin
         $display("FAIL: commit %0d level %0d tx %0d ty %0d", commits, c_level, c_tx, c_ty);
         errors = errors + 1;
     end else $display("PASS: the tile was committed once, with its own coordinates");
+    // the whole point: the table now says the tile is there, and the address it
+    // gives is the one the loader wrote to
+    lookup(2'd1, 15'd5, 15'd2);
+    if (!hit_now) begin $display("FAIL: the committed tile is not a hit"); errors = errors + 1; end
+    else if (hit_addr !== c_addr) begin
+        $display("FAIL: lookup address %08h, the blocks went to %08h", hit_addr, c_addr);
+        errors = errors + 1;
+    end else $display("PASS: the committed tile is a hit at the address its blocks went to");
+    for (n = 0; n < 1024; n = n + 1)
+        if (mem[hit_addr + 64512 + n] !== tile_byte_at(64512 + n)) bad = bad + 1;
+    if (bad != 0) begin $display("FAIL: %0d of the last block's bytes wrong", bad); errors = errors + 1; end
+    else $display("PASS: the tile's last block landed");
 
     // 7. a block whose CRC is wrong is refused and commits nothing
     $display("--- test 7: a corrupt tile block is refused");
@@ -382,7 +445,9 @@ initial begin
     send_tile(2'd0, 15'd1, 15'd2, 0, 1020, 1'b0);
     expect_byte(8'h15, "misaligned NAK");
     expect_byte("D", "misaligned NAK letter");
-    if (mem[TB_POOL + (5'd1 ^ 5'd2) * 65536] !== 8'h00) begin
+    lookup(2'd0, 15'd1, 15'd2);
+    #1;
+    if (mem[fill_addr] !== 8'h00) begin
         $display("FAIL: a refused block wrote to the pool");
         errors = errors + 1;
     end else $display("PASS: a refused block writes nothing");

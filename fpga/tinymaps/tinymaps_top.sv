@@ -61,6 +61,16 @@ module tinymaps_top #(
 localparam int OUT_W = 1280;
 localparam int OUT_H = 720;
 
+// The tile pool.  The pack finishes at 27.62 MiB of the dock's 32 (its last
+// level ends at 0x01B9DBD8), so the pool takes the 4 MiB above 28 and ends
+// exactly at the top of the part: 64 slots of 64 KiB, sixteen tiles more than a
+// 1280x720 screen of z15 needs counting partials, which leaves room for the
+// prefetch to be ahead of the picture.  It is not yet where the streaming design
+// wants to end up -- that needs the pack to give up its finest level -- but it
+// is a region nothing else writes, which is what makes accepting tiles safe.
+localparam [24:0] POOL_BASE = 25'h01C0_0000;
+localparam int    POOL_SLOTS = 64;
+
 wire clk27, hclk, hclk5, clk, fclk;
 
 reg sys_resetn = 0;
@@ -355,19 +365,17 @@ maps_uart_tx #(.CLK_HZ(74_250_000), .BAUD(LINK_BAUD), .OVERSAMPLE(LINK_OVERSAMPL
     u_uart_tx (.clk(hclk), .resetn(rstn_h), .start(utx_start), .data(utx_data),
                .tx(uart_tx), .busy(utx_busy));
 
-maps_link_rx u_loader (
+maps_link_rx #(.TILES(1'b1)) u_loader (
     .clk(hclk), .resetn(rstn_h),
     .rx_data(urx_data), .rx_valid(urx_valid),
     .tx_start(utx_start), .tx_data(utx_data), .tx_busy(utx_busy),
     .wr_req(ld_req), .wr_addr(ld_addr), .wr_lanes(ld_lanes),
     .wr_wdata(ld_wdata), .wr_ack(sd_ack),
     .pal_we(ld_pal_we), .pal_idx(ld_pal_idx), .pal_data(ld_pal_data),
-    // The tile pool has no home yet: the pack occupies 27.62 MiB of the dock's
-    // 32 and the pool's base is inside it, so command 0x1D stays off here
-    // (TILES defaults to 0) and this address is never used.  It is tied rather
-    // than left open because an open input on a path that writes memory is not
-    // something to leave to a synthesis warning.
-    .fill_addr(25'd0),
+    // a tile the host sends lands in the pool above the pack, at the address the
+    // page table derives, and is committed to the table when its last block is in
+    .fill_level(fill_level), .fill_tx(fill_tx), .fill_ty(fill_ty),
+    .fill_addr(fill_addr), .fill_commit(fill_commit),
     .vp_we(vp_we), .vp_base(vp_base), .vp_w(vp_w), .vp_h(vp_h),
     .vp_step(vp_step), .vp_x0(vp_x0), .vp_y0(vp_y0),
     .st_base(LEVEL_BASE), .st_w(LEVEL_W), .st_h(LEVEL_H), .st_step(STEP),
@@ -381,6 +389,25 @@ maps_link_rx u_loader (
     .nav_btn(nav_btn), .nav_mouse(nav_mouse),
     .busy(), .images(), .bytes_written(), .last_nak(),
     .overflows(), .timeouts()
+);
+
+// ----------------------------------------------------------- tile page table ---
+// The pool's directory: which tile is in which slot.  Nothing looks a tile up
+// yet -- the renderer still fetches linearly -- so this answers the loader and
+// remembers what it was told, which is what makes a tile the host sends land in
+// the reserved pool and be findable later.
+wire        fill_commit;
+wire [1:0]  fill_level;
+wire [14:0] fill_tx, fill_ty;
+wire [24:0] fill_addr;
+
+maps_tiles #(.SLOTS(POOL_SLOTS), .TBITS(16), .POOL_BASE(POOL_BASE)) u_tiles (
+    .clk(hclk), .resetn(rstn_h),
+    .lk_valid(1'b0), .lk_level(2'd0), .lk_tx(15'd0), .lk_ty(15'd0),
+    .lk_hit(), .lk_addr(),
+    .fill_commit(fill_commit), .fill_level(fill_level),
+    .fill_tx(fill_tx), .fill_ty(fill_ty), .fill_addr(fill_addr),
+    .hits(), .misses(), .idle()
 );
 
 // ------------------------------------------------------------- line store ---

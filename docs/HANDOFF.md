@@ -309,10 +309,12 @@
   exists too: command `0x1D` carries one block of one tile, the loader writes it
   to the slot the page table derives and tells the table the tile is resident
   only when the block that ends it has passed its CRC and the write port has
-  drained.  Both halves are proven in simulation and neither is in the top: the
-  tile command is behind `TILES`, which is off, because the pack occupies 27.62
-  MiB of the dock's 32 and the pool's base is inside it -- a tile written today
-  would land on the picture.  See `docs/streaming-scope.md`.
+  drained.  Both halves are in the top now, and the pool has a home: the pack
+  ends at 27.62 MiB, so the pool takes the four megabytes above 28 as 64 slots of
+  64 KiB, ending at the top of the part.  `TILES` is on, `maps_tiles` is
+  instantiated, and a tile the host sends lands there and is committed -- but
+  nothing looks a tile up yet, because the renderer still fetches linearly.  See
+  `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The

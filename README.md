@@ -196,8 +196,8 @@ must be multiples of eight, which is what lets the pool be written in whole word
 through the same port; the destination is the address the page table derives from
 the coordinates plus `offset`, never an address the host names. The table is told
 the tile is resident only when the block that ends it passes its CRC and the port
-has drained. It is behind the `TILES` parameter, which the top leaves off until
-the pool has a home -- the pack occupies 27.62 MiB of the dock's 32.
+has drained. The pool is the four megabytes above the pack's 27.62,
+`0x01C0_0000` to the top of the part: 64 slots of 64 KiB.
 
 The receiver parses the link's frames itself -- `0xAA len_hi len_lo cmd
 payload`, the length big-endian counting the command byte and below 2048 -- and

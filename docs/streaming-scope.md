@@ -249,15 +249,25 @@ testbench than from a rebuilt renderer.
   not make a tile resident, that the block which ends the tile commits it once
   with its own coordinates, that a corrupt block commits nothing, and that a
   refused block writes nothing.
-- **Note: the tile command is off in the top.** `maps_link_rx`'s `TILES`
-  parameter defaults to 0 and `tinymaps_top` leaves it there, because the pack
-  occupies 27.62 MiB of the dock's 32 and the pool's base is inside it: a tile
-  written today would land on the picture.  The testbench turns it on.  It goes on
-  in the top with the page table and the pool's reservation, which is the next
-  piece.
-- **Next: the pool's home and the page table in the top**, then prefetch,
-  eviction and the coarse fallback on a miss (which is what makes that no-retry
-  behaviour harmless), then 4bpp in the pixel path.
+- **Done: the pool has a home, and the table is in the top.** The pack's last
+  level ends at `0x01B9DBD8`, 27.62 MiB in, so the pool takes the four megabytes
+  above 28 and ends exactly at the top of the part: `POOL_BASE = 0x01C0_0000`,
+  64 slots of 64 KiB.  That is sixteen tiles more than a 1280x720 screen of z15
+  needs counting partials, which is room for a prefetch to be ahead of the
+  picture.  `tinymaps_top` instantiates `maps_tiles` with the loader's fill ports
+  and turns `TILES` on, so a tile the host sends now lands in that reserved region
+  and is committed to the table.  Nothing looks a tile up yet -- the renderer
+  still fetches linearly -- so the table answers the loader and remembers.
+- **The hash stopped multiplying.** `slot_of` computed `ty * 31`, which was free
+  while `fill_addr` was a register; the loader now takes the address before the
+  bytes arrive, so it is combinational and feeds the SDRAM controller's address
+  mux.  That one multiplier took the whole design from 84.35 to 70.15 MHz at seed
+  1 and failed seven of eight seeds.  Written as a shift and a subtract it is the
+  same hash and the same slots, and the sweep is back to 75.46 through 88.40.
+- **Next: the renderer's miss has to reach `maps_tile_req`**, and the coarse
+  fallback has to draw something while the tile is on its way, which is what makes
+  the renderer's not retrying a missed row harmless.  Then prefetch and eviction,
+  then 4bpp in the pixel path.
 
 **A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
 At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the
