@@ -31,6 +31,8 @@ reg        clear = 0;
 reg        ev = 0;
 reg signed [15:0] ev_px = 0, ev_py = 0;
 reg signed [1:0]  ev_zoom = 0;
+reg        [2:0]  ev_btn = 3'b000;
+reg               ev_mouse = 1'b1;
 
 wire        o_we;
 wire [24:0] o_base;
@@ -38,6 +40,9 @@ wire [15:0] o_w, o_h;
 wire [31:0] o_step;
 wire signed [31:0] o_x0, o_y0;
 wire        busy;
+wire [10:0] ptr_x;
+wire [9:0]  ptr_y;
+wire        ptr_hold;
 
 maps_nav #(.OUT_W(1280), .OUT_H(720)) dut (
     .clk(clk), .resetn(resetn),
@@ -48,6 +53,8 @@ maps_nav #(.OUT_W(1280), .OUT_H(720)) dut (
     .lv_w0(lv_w0), .lv_w1(lv_w1), .lv_w2(lv_w2), .lv_w3(lv_w3),
     .lv_h0(lv_h0), .lv_h1(lv_h1), .lv_h2(lv_h2), .lv_h3(lv_h3),
     .clear(clear), .ev(ev), .ev_px(ev_px), .ev_py(ev_py), .ev_zoom(ev_zoom),
+    .ev_btn(ev_btn), .ev_mouse(ev_mouse),
+    .ptr_x(ptr_x), .ptr_y(ptr_y), .ptr_hold(ptr_hold),
     .o_we(o_we), .o_base(o_base), .o_w(o_w), .o_h(o_h), .o_step(o_step),
     .o_x0(o_x0), .o_y0(o_y0), .busy(busy)
 );
@@ -55,10 +62,13 @@ maps_nav #(.OUT_W(1280), .OUT_H(720)) dut (
 integer errors = 0;
 
 // drive one event and adopt what comes back
-task automatic act(input signed [15:0] px, input signed [15:0] py, input signed [1:0] z);
+// btn defaults to the left button held, which is the hand on the land: every
+// pan test below predates the grab and expects motion to move the map.
+task automatic act(input signed [15:0] px, input signed [15:0] py, input signed [1:0] z,
+                   input [2:0] btn = 3'b001, input mouse = 1'b1);
     integer t;
 begin
-    ev = 1; ev_px = px; ev_py = py; ev_zoom = z;
+    ev = 1; ev_px = px; ev_py = py; ev_zoom = z; ev_btn = btn; ev_mouse = mouse;
     @(posedge clk);
     ev = 0;
     t = 0;
@@ -117,6 +127,44 @@ initial begin
     act(-128, 0, 0);
     want(cur_x0 == 0, "pan clamps at the left edge");
 
+    // --- the cursor follows the mouse, and stays on the screen
+    reset_pan;
+    act(-2000, -2000, 0, 3'b000);
+    want(ptr_x == 11'd0 && ptr_y == 10'd0, "the cursor clamps at the top left");
+    act(4000, 4000, 0, 3'b000);
+    want(ptr_x == 11'd1279 && ptr_y == 10'd719, "the cursor clamps at the bottom right");
+    act(-639, -359, 0, 3'b000);
+    want(ptr_x == 11'd640 && ptr_y == 10'd360, "the cursor lands back on the middle");
+
+    // --- with no button down the mouse moves the marker and not the land
+    reset_pan;
+    cur_base = lv_base0; cur_w = 4608; cur_h = 4608;
+    cur_x0 = 655360; cur_y0 = 327680; cur_step = 32'd65536;
+    x_before = cur_x0;
+    act(32, 16, 0, 3'b000);
+    want(cur_x0 == x_before && cur_y0 == 327680,
+         "the mouse with no button held leaves the land where it is");
+    want(ptr_x == 11'd672 && ptr_y == 10'd376, "the marker moved with the mouse");
+    want(ptr_hold == 1'b0, "the marker shows no button held");
+
+    // --- with the left button down the same motion moves the land
+    x_before = cur_x0;
+    act(32, 16, 0, 3'b001);
+    want(cur_x0 - x_before == 32 * 65536, "the hand on the land pans it");
+    want(ptr_hold == 1'b1, "the marker shows the button held");
+
+    // --- the wheel zooms about the marker, not the middle of the screen
+    reset_pan;
+    cur_x0 = 655360; cur_y0 = 327680; cur_step = 32'd50000;
+    // put the marker off centre so the two are distinguishable
+    act(-400, -200, 0, 3'b000);
+    centre_before = cur_x0 + ptr_x * cur_step;
+    act(0, 0, -1, 3'b000);
+    centre_after = cur_x0 + ptr_x * cur_step;
+    want(centre_after - centre_before < 640 && centre_before - centre_after < 640,
+         "zoom in keeps the point under an off-centre cursor");
+    want(cur_x0 != 655360, "an off-centre cursor moves the origin, not the middle");
+
     // --- a level exactly as wide as the screen has nowhere to pan to
     reset_pan;
     cur_base = lv_base3; cur_w = 768; cur_h = 768; cur_step = 32'd39322;
@@ -129,13 +177,13 @@ initial begin
     cur_base = lv_base0; cur_w = 4608; cur_h = 4608;
     cur_x0 = 655360; cur_y0 = 327680; cur_step = 32'd50000;
     x_before = cur_x0;
-    centre_before = cur_x0 + 640 * 50000;
+    centre_before = cur_x0 + ptr_x * 50000;
     act(0, 0, -1);
     want(cur_step < 50000 && cur_step > 50000 - 50000/8,
          "one turn zooms in by under an eighth");
-    centre_after = cur_x0 + 640 * cur_step;
+    centre_after = cur_x0 + ptr_x * cur_step;
     want(centre_after - centre_before < 640 && centre_before - centre_after < 640,
-         "zoom in keeps the centre within a pixel");
+         "zoom in keeps the point under the cursor within a pixel");
 
     // --- zoom in at the bottom of the table crosses to the finer level
     reset_pan;
@@ -203,7 +251,7 @@ initial begin
     end
 
     if (errors) $display("RESULT: FAIL (%0d errors)", errors);
-    else        $display("RESULT: PASS (pan, clamps, zoom steps and both crossings)");
+    else        $display("RESULT: PASS (pan, clamps, zoom steps, both crossings, cursor and grab)");
     $finish;
 end
 

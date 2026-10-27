@@ -781,3 +781,39 @@ Ship this bitstream with the pointer and zoom-to-cursor work so one deploy cover
 - User Test: NOT RUN
 
 ---
+
+## 23 COMMIT Unreleased 2026-10-26T19:32:41-07:00
+
+#### Coming From:
+
+Unreleased 5220e8a
+
+#### Purpose:
+
+Give the map the mouse interaction the user asked for after watching TinyCreature: a cursor drawn on the picture, a left button that takes the land and lets it go, and a wheel that zooms wherever the cursor is rather than about the middle of the screen.
+
+#### Outcome:
+
+TinyCreature's own records fixed the shape of it: a sixteen-pixel marker that is a green frame with no button down and a red crosshair while one is held, changed on the button state rather than on movement, and a left press that takes the piece of land under the marker. `maps_link_rx` had been latching the mouse report's button byte and dropping it; it now forwards the buttons and one flag saying whether the event came from the mouse or the keyboard, because a keyboard pan has no marker to hold. `maps_nav` tracks the cursor in output pixels, starts it in the middle, clamps it to the screen, moves it on every report, and pans the land only while the left button is held -- motion with nothing held moves the marker alone. The wheel zooms about the cursor: the origin shift is the cursor's coordinates times the change in step, where it used to be a constant 640 and 360 that kept the middle of the screen fixed. `tinymaps_top` draws the marker over the picture rather than through the palette, so the pack's colours are untouched. Two multiplies came with this and each needed its own clock before timing would close: the step change is narrowed to seventeen bits and registered in a new `N_PIVOT` state, which took placement seed 1 from 65.79 to 73.51 MHz, and the next worst path turned out to be the renderer's fetch base, the other half of the chain entry 22 split, so `r_pf * level_w` is now registered in a new `S_RADDR` state. `tb_maps_nav` gained tests for the cursor clamping at both corners, for motion with no button leaving the land alone, for a held button panning it, and for a zoom holding the point under an off-centre cursor -- that last one fails if the pivot is still the screen centre. Every testbench and both checkers pass, `check_render` included. The eight-seed sweep gives six of eight passing, 74.58 to 81.81 MHz, against eight of eight at 82.02 to 92.67 for the timing-only build, so this feature costs about seven megahertz and the design is seed-sensitive again at the low end; the remaining worst path is 4.5 ns of routing between the row buffers and the SDRAM controller, which is placement rather than logic. Deployed as `tinymaps.f3aec678d40b.bin`, 4,450,176 bytes, at seed 7 and 81.81 MHz against 74.25, with the pack reloaded and the view set on L3, and the user reports the interaction right. This entry also records what entry 22 could not: its build `tinymaps.d9e7bf60b5fe.bin` was deployed once the board returned to USB and the user passed it, so the timing fix is confirmed on hardware and entry 22's `NOT RUN` stages are now satisfied rather than outstanding. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Two changes the user asked for next: the marker doubles to thirty-two pixels, and the drag direction inverts, because pulling the land currently sends it the opposite way from the hand -- panning from a mouse drag has to negate the report while the keyboard keeps its own direction. After that the margin wants attention again, since six of eight seeds pass: the path to look at is the row-buffer to SDRAM routing at 4.5 ns, not another seed sweep. Free rotation remains out of scope until a bandwidth model says the row-based sampler could serve a diagonal line at all.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/maps_nav.sv
+- fpga/tinymaps/maps_render.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_nav.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

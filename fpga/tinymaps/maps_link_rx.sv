@@ -131,6 +131,8 @@ module maps_link_rx #(
     output reg  signed [15:0] nav_px,
     output reg  signed [15:0] nav_py,
     output reg  signed [1:0]  nav_zoom,
+    output reg  [2:0]  nav_btn,        // the mouse's buttons, bit 0 left
+    output reg         nav_mouse,      // the event is the mouse, not the keyboard
 
     // what the renderer is being told, for command 0x0C
     input  wire [24:0] st_base,
@@ -609,6 +611,8 @@ always @(posedge clk or negedge resetn) begin
                         3'd4: nav_py <= {{8{in_byte[7]}}, in_byte};
                         default: begin
                             nav_zoom <= in_byte[7] ? 2'sd1 : (in_byte[6:0] != 7'd0 ? -2'sd1 : 2'sd0);
+                            nav_btn  <= in_b2[2:0];
+                            nav_mouse <= 1'b1;
                             nav_ev   <= 1'b1;
                         end
                     endcase
@@ -629,6 +633,7 @@ always @(posedge clk or negedge resetn) begin
                                 default: ;
                             endcase
                         end
+                        nav_mouse <= 1'b0;
                         nav_ev <= 1'b1;
                         is <= I_IDLE;
                     end else begin

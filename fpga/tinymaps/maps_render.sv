@@ -118,7 +118,8 @@ wire [15:0] qnw = (nxt == 2'd0) ? q0 : (nxt == 2'd1) ? q1 : q2;
 // ------------------------------------------------------------- line engine ---
 localparam [2:0] S_IDLE = 3'd0, S_PLAN = 3'd1, S_BFETCH = 3'd2,
                  S_EMIT = 3'd3, S_DONE  = 3'd4,
-                 S_ROWS = 3'd5;        // the row pair, one cycle ahead of S_PLAN
+                 S_ROWS = 3'd5,        // the row pair
+                 S_RADDR = 3'd6;       // that row's byte address in the level
 
 reg [2:0]  st;
 reg [9:0]  cy_d;
@@ -179,6 +180,10 @@ wire [7:0] b1 = p1b_odd ? qnw[7:0]   : qnw[15:8];
 wire [31:0] row_ok = (r0 + 32'd1 >= level_h) ? level_h - 32'd1 : r0 + 32'd1;
 wire [31:0] pf_row = (r0 + 32'd2 >= level_h) ? level_h - 32'd1 : r0 + 32'd2;
 reg  [31:0] r_ok, r_pf;
+// r_pf * level_w, registered: with the row pair it was a multiply and a 25-bit
+// add chain into f_base inside one clock, which is what the critical path became
+// once the row pair moved out of it.
+reg  [31:0] r_addr;
 wire        pf_want = !(bval[0] && brow[0] == r_pf) &&
                       !(bval[1] && brow[1] == r_pf) &&
                       !(bval[2] && brow[2] == r_pf);
@@ -289,7 +294,12 @@ always @(posedge clk or negedge resetn) begin
         S_ROWS: begin
             r_ok <= row_ok;
             r_pf <= pf_row;
-            st   <= S_PLAN;
+            st   <= S_RADDR;
+        end
+
+        S_RADDR: begin
+            r_addr <= r_pf[15:0] * level_w;
+            st     <= S_PLAN;
         end
 
         S_PLAN: begin
@@ -301,7 +311,7 @@ always @(posedge clk or negedge resetn) begin
                 if (!f_busy && !f_req && pf_want) begin
                     f_req  <= 1'b1; f_buf <= fre; f_row <= r_pf; f_cnt <= SPAN;
                     f_col  <= k0_pf;
-                    f_base <= level_base + (r_pf * level_w) + {1'b0, k0_pf[22:0], 1'b0};
+                    f_base <= level_base + r_addr + {1'b0, k0_pf[22:0], 1'b0};
                 end
                 emit_x <= 16'd0; acc_x <= src_x0; rd_idx <= {AIDX{1'b0}};
                 st <= S_EMIT;
@@ -312,7 +322,7 @@ always @(posedge clk or negedge resetn) begin
                 if (!f_busy && !f_req && pf_want) begin
                     f_req  <= 1'b1; f_buf <= cur; f_row <= r_pf; f_cnt <= SPAN;
                     f_col  <= k0_pf;
-                    f_base <= level_base + (r_pf * level_w) + {1'b0, k0_pf[22:0], 1'b0};
+                    f_base <= level_base + r_addr + {1'b0, k0_pf[22:0], 1'b0};
                 end
                 emit_x <= 16'd0; acc_x <= src_x0; rd_idx <= {AIDX{1'b0}};
                 st <= S_EMIT;
@@ -352,7 +362,7 @@ always @(posedge clk or negedge resetn) begin
             3'd5: if (!f_busy && !f_req) begin
                 f_req  <= 1'b1; f_buf <= 2'd2; f_row <= r_pf; f_cnt <= SPAN;
                 f_col  <= k0_pf;
-                f_base <= level_base + (r_pf * level_w) + {1'b0, k0_pf[22:0], 1'b0};
+                f_base <= level_base + r_addr + {1'b0, k0_pf[22:0], 1'b0};
                 block_step <= 3'd6;
             end
             3'd6: if (f_ack) begin

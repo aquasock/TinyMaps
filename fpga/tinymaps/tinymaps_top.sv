@@ -134,6 +134,11 @@ wire        [15:0] lv_h0, lv_h1, lv_h2, lv_h3;
 wire               nav_ev;
 wire signed [15:0] nav_px, nav_py;
 wire signed [1:0]  nav_zoom;
+wire        [2:0]  nav_btn;
+wire               nav_mouse;
+wire        [10:0] ptr_x;
+wire        [9:0]  ptr_y;
+wire               ptr_hold;
 wire               nav_we;
 wire        [24:0] nav_base;
 wire        [15:0] nav_w, nav_h;
@@ -259,6 +264,8 @@ maps_nav #(.OUT_W(OUT_W), .OUT_H(OUT_H)) u_nav (
     .lv_h0(lv_h0), .lv_h1(lv_h1), .lv_h2(lv_h2), .lv_h3(lv_h3),
     .clear(vp_we),
     .ev(nav_ev), .ev_px(nav_px), .ev_py(nav_py), .ev_zoom(nav_zoom),
+    .ev_btn(nav_btn), .ev_mouse(nav_mouse),
+    .ptr_x(ptr_x), .ptr_y(ptr_y), .ptr_hold(ptr_hold),
     .o_we(nav_we), .o_base(nav_base), .o_w(nav_w), .o_h(nav_h),
     .o_step(nav_step), .o_x0(nav_x0), .o_y0(nav_y0), .busy()
 );
@@ -351,6 +358,7 @@ maps_link_rx u_loader (
     .lv_w0(lv_w0), .lv_w1(lv_w1), .lv_w2(lv_w2), .lv_w3(lv_w3),
     .lv_h0(lv_h0), .lv_h1(lv_h1), .lv_h2(lv_h2), .lv_h3(lv_h3),
     .nav_ev(nav_ev), .nav_px(nav_px), .nav_py(nav_py), .nav_zoom(nav_zoom),
+    .nav_btn(nav_btn), .nav_mouse(nav_mouse),
     .busy(), .images(), .bytes_written(), .last_nak(),
     .overflows(), .timeouts()
 );
@@ -376,9 +384,31 @@ always @(posedge hclk) begin
     rd_q2 <= rd_q;
     rd_q3 <= rd_q2;
 end
-reg  [23:0] rgb;
-always @(posedge hclk)
-    rgb <= (cy < OUT_H) ? pal[rd_q3] : 24'h000000;
+// ------------------------------------------------------------- the cursor ---
+// A sixteen-pixel marker centred on the cursor, drawn over the picture rather
+// than through the palette so the pack's colours are untouched.  Green frame
+// while nothing is held and a red crosshair while a button is, which is
+// TinyCreature's own scheme -- the colours change the moment a button moves,
+// whether or not the mouse does.  It is centred on the pixel it is drawn at, so
+// the land a press takes is the land under the middle of the marker.
+//
+// The marker is combined combinationally with the raster counters, which is
+// right even though the picture it is drawn over comes out of a registered
+// read: the HDMI stage takes the colour and the counters on the same clock, so a
+// marker placed by cx and cy lands on the pixel those counters are drawing.  The
+// map's own few pixels of read latency shift the whole picture uniformly, not
+// the marker against it.
+wire [11:0] spx = {1'b0, cx} - {1'b0, ptr_x};
+wire [11:0] spy = {1'b0, cy} - {1'b0, ptr_y};
+wire        sp_in   = (spx[11:4] == 8'd0) && (spy[11:4] == 8'd0);
+wire        sp_edge = (spx[3:0] < 4'd2) || (spx[3:0] > 4'd13) ||
+                      (spy[3:0] < 4'd2) || (spy[3:0] > 4'd13);
+wire        sp_mid  = (spx[3:0] == 4'd7) || (spx[3:0] == 4'd8) ||
+                      (spy[3:0] == 4'd7) || (spy[3:0] == 4'd8);
+wire        sp_hit  = sp_in && (ptr_hold ? sp_mid : sp_edge);
+wire [23:0] rgb_vis = sp_hit ? (ptr_hold ? 24'hFF0000 : 24'h00FF00)
+                             : ((cy < OUT_H) ? pal[rd_q3] : 24'h000000);
+
 
 // -------------------------------------------------------------------- HDMI ---
 logic [2:0] tmds;
@@ -388,7 +418,7 @@ maps_hdmi #(.VIDEOID(VIDEOID)) u_hdmi (
     .clk_pixel(hclk),
     .clk_5x_pixel(hclk5),
     .clk_audio(clk_audio),
-    .rgb(rgb),
+    .rgb(rgb_vis),
     .tmds(tmds),
     .tmds_clock(tmdsClk),
     .cx(cx),

@@ -54,6 +54,8 @@ module maps_nav #(
     input  wire signed [15:0] ev_px,
     input  wire signed [15:0] ev_py,
     input  wire signed [1:0]  ev_zoom,
+    input  wire [2:0]  ev_btn,         // the mouse buttons, as the report had them
+    input  wire        ev_mouse,       // this event is the mouse, not the keyboard
 
     // the viewport to latch
     output reg         o_we,
@@ -63,7 +65,12 @@ module maps_nav #(
     output reg  [31:0] o_step,
     output reg  signed [31:0] o_x0,
     output reg  signed [31:0] o_y0,
-    output reg         busy
+    output reg         busy,
+
+    // the cursor, which the pixel path draws and the wheel zooms about
+    output reg  [10:0] ptr_x,
+    output reg  [9:0]  ptr_y,
+    output reg         ptr_hold        // a button is down, so the marker shows it
 );
 
 localparam signed [15:0] NUDGE = 16'sd8;      // output pixels per pan step
@@ -134,7 +141,8 @@ reg [31:0] t_step;
 reg        t_fine, t_coarse;
 
 localparam [2:0] N_IDLE = 3'd0, N_PAN = 3'd1, N_ZOOM = 3'd2,
-                 N_APPLY = 3'd3, N_DONE = 3'd4;
+                 N_APPLY = 3'd3, N_DONE = 3'd4,
+                 N_PIVOT = 3'd5;      // the cursor-times-step multiply, registered
 reg [2:0] ns;
 
 // the new step, and the step in force, as signed values for the arithmetic
@@ -142,11 +150,17 @@ wire signed [31:0] s_old = $signed({1'b0, cur_step[30:0]});
 wire signed [31:0] s_new = $signed({1'b0, t_step[30:0]});
 wire signed [31:0] s_diff = s_old - s_new;
 
-// origin shift that keeps the centre still: half a line across, half a screen
-// down, times the change in step
-wire signed [31:0] dx_centre = (s_diff <<< 9) + (s_diff <<< 7);                      // 640
-wire signed [31:0] dy_centre = (s_diff <<< 8) + (s_diff <<< 6) +
-                               (s_diff <<< 5) + (s_diff <<< 3);                      // 360
+// origin shift that keeps the cursor still: the cursor's own coordinates times
+// the change in step.  It used to be a constant half a line and half a screen,
+// which kept the middle of the screen fixed; the wheel now zooms about wherever
+// the marker is, so the land under the marker stays under it.  One multiply
+// each, which the timing margin bought this cycle.
+// The change in step is at most one level crossing, 32768, so seventeen bits of
+// it are plenty and the product stays under 28 bits.  Narrowing the multiply is
+// what keeps it inside a clock; the state machine gives it one of its own below.
+wire signed [16:0] s_d17 = s_diff[16:0];
+wire signed [31:0] dx_centre = s_d17 * $signed({22'd0, ptr_x});
+wire signed [31:0] dy_centre = s_d17 * $signed({22'd0, ptr_y});
 
 // The furthest the origin can go with a given step.  A level narrower than the
 // screen leaves no room at all, so the bound is held at zero rather than going
@@ -162,6 +176,10 @@ wire signed [31:0] max_y_new = max_steps($signed({16'd0, h_of(t_level)}) * 32'sd
                                ((s_new <<< 9) + (s_new <<< 7) +
                                 (s_new <<< 6) + (s_new <<< 4)));                     // 720
 
+// the cursor, moved by one report and clamped to the screen
+wire signed [17:0] px_next = $signed({7'd0, ptr_x}) + $signed({{2{ev_px[15]}}, ev_px});
+wire signed [17:0] py_next = $signed({8'd0, ptr_y}) + $signed({{2{ev_py[15]}}, ev_py});
+
 wire signed [31:0] nudge = s_old <<< 3;        // 8 * step
 wire signed [31:0] max_x_old = max_steps($signed({16'd0, cur_w}) * 32'sd65536 -
                                ((s_old <<< 10) + (s_old <<< 8)));
@@ -170,6 +188,7 @@ wire signed [31:0] max_y_old = max_steps($signed({16'd0, cur_h}) * 32'sd65536 -
                                 (s_old <<< 6) + (s_old <<< 4)));
 
 reg signed [31:0] ax0, ay0;
+reg signed [31:0] dxc, dyc;            // the pivot shift, one cycle ahead of use
 
 always @(posedge clk) begin
     o_we <= 1'b0;
@@ -181,23 +200,41 @@ always @(posedge clk) begin
         c_level <= 2'd0;
         t_level <= 2'd0; t_step <= 32'd65536; t_fine <= 1'b0; t_coarse <= 1'b0;
         ax0 <= 32'sd0; ay0 <= 32'sd0;
+        dxc <= 32'sd0; dyc <= 32'sd0;
         o_base <= 25'd0; o_w <= 16'd0; o_h <= 16'd0;
         o_step <= 32'd65536; o_x0 <= 32'sd0; o_y0 <= 32'sd0;
+        ptr_x <= OUT_W[10:0] >> 1;     // the marker starts in the middle
+        ptr_y <= OUT_H[9:0] >> 1;
+        ptr_hold <= 1'b0;
     end else begin
         case (ns)
             N_IDLE: if (clear) begin
                 acc_x <= 16'sd0; acc_y <= 16'sd0;
             end else if (ev) begin
                 busy  <= 1'b1;
-                acc_x <= acc_x + ev_px;
-                acc_y <= acc_y + ev_py;
+                // the cursor follows the mouse and is held inside the screen;
+                // a keyboard event leaves it where it is
+                if (ev_mouse) begin
+                    ptr_x <= (px_next < 0) ? 11'd0 :
+                             (px_next > OUT_W - 1) ? OUT_W[10:0] - 11'd1 : px_next[10:0];
+                    ptr_y <= (py_next < 0) ? 10'd0 :
+                             (py_next > OUT_H - 1) ? OUT_H[9:0] - 10'd1 : py_next[9:0];
+                    ptr_hold <= ev_btn[0];
+                end
                 z_in  <= ev_zoom < 0;
                 z_out <= ev_zoom > 0;
                 nx0   <= cur_x0;
                 ny0   <= cur_y0;
                 ct    <= 5'd16;
                 c_level <= lvl;
-                ns <= N_PAN;
+                // the hand takes the land only while the left button is held
+                if (!ev_mouse || ev_btn[0]) begin
+                    acc_x <= acc_x + ev_px;
+                    acc_y <= acc_y + ev_py;
+                    ns <= N_PAN;
+                end else begin
+                    ns <= N_ZOOM;
+                end
             end
 
             // whole nudges only; a remainder waits for the next report
@@ -253,10 +290,20 @@ always @(posedge clk) begin
                 end else begin
                     t_step <= cur_step;
                 end
-                ns <= N_APPLY;
+                ns <= N_PIVOT;
             end
 
-            // keep the centre: shift by half a line times the change in step,
+            // the cursor times the change in step, on its own: the multiply,
+            // the add into the origin and the clamp were one clock before, and
+            // that chain would not close once the shift depended on where the
+            // cursor was rather than on a constant
+            N_PIVOT: begin
+                dxc <= dx_centre;
+                dyc <= dy_centre;
+                ns  <= N_APPLY;
+            end
+
+            // keep the cursor still: shift by its coordinates times the change in step,
             // or double / halve everything when the level changes
             N_APPLY: begin
                 if (t_fine) begin
@@ -266,8 +313,8 @@ always @(posedge clk) begin
                     ax0 <= nx0 >>> 1;
                     ay0 <= ny0 >>> 1;
                 end else begin
-                    ax0 <= nx0 + dx_centre;
-                    ay0 <= ny0 + dy_centre;
+                    ax0 <= nx0 + dxc;
+                    ay0 <= ny0 + dyc;
                 end
                 ns <= N_DONE;
             end

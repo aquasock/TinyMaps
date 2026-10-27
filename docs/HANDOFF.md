@@ -124,7 +124,26 @@
   emit that needed it, which put the next line into the blocking path too and
   cascaded for four lines -- the frame-top corruption.  The user reports pan and
   zoom work; the frame top has not been confirmed separately.
-- **Fixed this cycle - level crossings keep the centre.** Zooming in or out
+- **Added this cycle - the cursor, the hand and zoom about the cursor.**  The
+  mouse now drives a marker drawn over the picture: a green frame with no button
+  down and a red crosshair while one is, taken from TinyCreature's scheme
+  (`docs` there: a 16x16 green frame idle and a red crosshair held, changed on
+  the button state rather than on movement).  `maps_link_rx` was latching the
+  mouse's button byte and dropping it and now forwards the buttons plus a
+  mouse-versus-keyboard flag; `maps_nav` tracks the cursor in output pixels,
+  clamped to the screen, moves it on every report but pans the land only while
+  the left button is held, and zooms about the cursor instead of the screen
+  centre.  Two multiplies came with it (`s_diff * ptr_x`, `s_diff * ptr_y`), and
+  each needed a clock of its own before timing would close: the step change is
+  narrowed to seventeen bits and registered in a new `N_PIVOT` state, and the
+  renderer's fetch-base `r_pf * level_w` is now `S_RADDR`.  That took seed 1 from
+  65.79 to 73.91 MHz and the sweep to six of eight passing, 74.58 to 81.81, so
+  this build has about seven megahertz less margin than the timing-only one and
+  is again seed-sensitive at the low end.  Deployed as
+  `tinymaps.f3aec678d40b.bin` at seed 7 (81.81 MHz) and the user reports the
+  interaction right.  Free rotation is still out of scope: the row-based sampler
+  cannot serve a diagonal output line.
+- **Fixed last cycle - level crossings keep the centre.** Zooming in or out
   across the four levels used to walk the picture sideways, one jump at each
   boundary, and the cause was alignment: `maps_pack.py` cut each level on its
   own tile grid, so the four origins were 128 to 192 pixels apart while
