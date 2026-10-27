@@ -2,14 +2,21 @@
 //
 // The viewport is (level, step, origin).  Panning moves the origin by whole
 // 8-pixel nudges, because a mouse report counts output pixels and 8 output
-// pixels is a shift of the step.  Zooming walks a five-entry table of steps
-// between 0.5 and 1.0, a quarter of an octave apart, keeping the centre of the
-// screen on the same ground point: the origin moves by half a line times the
-// change in step.  When the table runs out at either end it steps to the next
-// level and starts at the other end.  The pack's levels are a factor of two
-// apart in metres per pixel, so a level crossing is a doubling of the source
-// coordinates and nothing else -- 0.5 on one level is 1.0 on the finer one at
-// twice the coordinates -- and the centre is preserved for free.
+// pixels is a shift of the step.  A turn multiplies the step, keeping the centre
+// of the screen on the same ground point: the origin moves by half a line times
+// the change in step.  A level crossing happens at a step of 0.5 or 1.0, where
+// the step is normalised exactly so the rounding never accumulates, and the
+// coordinates are doubled or halved.
+//
+// That doubling is only correct because every level puts its pixel (0,0) on the
+// same ground point.  The levels are a factor of two apart in metres per pixel,
+// so with one shared origin a ground position has exactly twice the coordinates
+// on the finer level and nothing else needs doing.  A pack whose levels were
+// each cut on their own tile grid breaks this, and the fabric cannot tell: the
+// level table it is given carries no origin, so every crossing lands the centre
+// off by that level's offset and the picture jumps.  The guarantee lives
+// outside the fabric instead -- tools/maps_pack.py cuts every level to one
+// shared origin, and tools/load_pack.py refuses a pack that does not.
 //
 // Nothing here multiplies two variables: the step table is constant, half a
 // line, a line and half a screen height are shift-and-add of the step, and the

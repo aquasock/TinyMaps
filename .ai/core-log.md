@@ -715,3 +715,37 @@ Repair the power input when convenient: lift one leg of that branch's input capa
 - User Test: PASS
 
 ---
+
+## 21 COMMIT Unreleased 2026-10-26T18:38:11-07:00
+
+#### Coming From:
+
+Unreleased a1a9be4
+
+#### Purpose:
+
+Stop the picture walking sideways at every level crossing when zooming, which the user saw as the map shifting three or four times on the way fully in or fully out.
+
+#### Outcome:
+
+The four levels of a pack are cut on their own 256-pixel tile grids, so their pixel (0,0) landed on four different ground points -- measured from the pack header, 128 pixels down for L1, 128 across and 64 down for L2, 192 across and 160 down for L3 -- while `maps_nav` crosses a level by doubling or halving the source coordinates, which is only correct when every level shares one origin. Each boundary therefore landed the centre off by that level's offset, and the level table the fabric is given carries no origin, so the fabric could neither detect nor correct it. The fix went into the pack rather than the fabric, on the grounds that seven of eight placement seeds fail at 74.25 MHz and adding arithmetic to `maps_nav` is the last thing the timing margin can afford: `levels()` now takes the finest level's tile corner as the shared origin and crops every level's mosaic to begin there, and where cropping would leave a coarse level narrower than 640 pixels -- the width a screen at step 0.5 shows, which is the step a crossing lands on -- it adds a ring of tiles on the right and bottom. The offsets are exact whole pixels of each coarse grid, because a level's pixels are a power-of-two subdivision of the same ground, so no pixel is resampled; the pack is now 27.62 MiB with L0 4608x4608, L1 2304x2432, L2 1152x1216 and L3 832x864, all recording origin 3857 (-12486753, 3966165), and seven more tiles were fetched to grow L3 from 3x3 to 4x4. `maps_pack.py verify` now fails a pack whose levels disagree about the origin and prints the shared one, and `tools/load_pack.py` refuses to send one, which was checked in both directions: it accepts the realigned pack and rejected a copy whose L1 origin had been patched back to the old value. `maps_nav.sv` changed in comments only, to state the invariant and where it is enforced; no RTL logic changed, and a rebuild at placement seed 7 reproduced `tinymaps.df0b0e056c49.bin` byte for byte at 75.65 MHz against 74.25, so the artefact on the board is exactly the committed source. The new pack was loaded over the link with all four levels and every CRC accepted, the level table sent, and the view put on L3 at step 0.65, which is the whole 832-pixel width in one screen; the crossing arithmetic was checked numerically before the test, doubling each level's coordinate for a common ground point and matching it against the finer level's own pixel to under 0.001 of a pixel. The user reports zooming fully out and back in with the centre held, so the alignment is now a property of the tool that builds the pack rather than an assumption noted in a comment. The levels still do not cover identical ground -- L3 spans about 32 km against L0's 22 -- so panning to a coarse level's outer margin and zooming back in clamps at the finer level's edge; that is unavoidable while a level must be 640 pixels wide and the common rectangle at z12 is 576. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The timing margin is now the only item carrying real risk: the eight-seed sweep gives `hclk` between 66.63 and 75.65 MHz with seed 7 the only pass, and the worst path runs through `maps_render.sv:173`'s `row_ok` into the fetch address, so registering that chain is the next piece of work and every subsequent logic change should be followed by a seed sweep. The two small defects are unchanged: the status readback's top byte reads wrong for bases above 16 MB, and the zoom ceiling still lets the finest level overshoot its own width.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_nav.sv
+- tools/load_pack.py
+- tools/maps_pack.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

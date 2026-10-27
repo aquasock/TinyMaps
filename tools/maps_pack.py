@@ -17,6 +17,7 @@ Image.MAX_IMAGE_PIXELS = None
 
 LAT, LON = 33.4484, -112.0740     # downtown Phoenix
 Z0, TILES = 15, 18                # finest level: 18x18 tiles at z15
+ALIGN_MIN_PX = 640                # the screen at step 0.5 shows 640 source pixels
 UA = "TinyMaps/0.1 (offline map pack for personal hardware; one-off fetch)"
 CACHE = os.path.expanduser("~/.cache/tinymaps/tiles")
 OUT = "work/pack/phoenix-18km.tmpk"
@@ -33,25 +34,54 @@ def tile_xy(lat, lon, z):
     return x, y
 
 def levels():
-    """finest first; each level covers the z15 ground rectangle exactly or as the
-    minimal tile-aligned superset."""
+    """finest first; every level is cut to one shared origin.
+
+    The navigation crosses levels by doubling or halving the source
+    coordinates, which is only true when all levels put their pixel (0,0) on
+    the same ground point.  A tile-aligned mosaic does not: each zoom's tiles
+    start on that zoom's own grid, so the four corners land up to a couple of
+    hundred pixels apart and the picture jumps at every crossing.  So the
+    finest level's tile corner is the shared origin, and every level is cropped
+    to begin there.  The offsets are exact whole pixels of the coarse grid,
+    because each level's pixels are a power-of-two subdivision of the same
+    ground; nothing is resampled.
+
+    Each level keeps its own extent, so the coarser ones still cover more
+    ground, except where cropping leaves less than ALIGN_MIN_PX across: then a
+    ring of tiles is added on the right and bottom.  Below that width a level
+    cannot fill the screen at step 0.5, which is where a crossing lands.
+    """
     n = 2 ** Z0
     cx, cy = tile_xy(LAT, LON, Z0)
     x0 = int(round(cx - TILES / 2)); y0 = int(round(cy - TILES / 2))
     x1, y1 = x0 + TILES, y0 + TILES          # exclusive, in z15 tile units
+
+    # the shared origin: the finest level's tile corner, in 3857, y downward
+    ts0 = 2*MERC_HALF/(2**Z0)
+    shared_x = -MERC_HALF + math.floor(x0) * ts0
+    shared_y =  MERC_HALF - math.floor(y0) * ts0
+
     out = []
     for lvl, z in enumerate(range(Z0, Z0 - 4, -1)):
         s = 2 ** (Z0 - z)                    # z15 tiles per tile at zoom z
         tx0, tx1 = math.floor(x0/s), math.ceil(x1/s)
         ty0, ty1 = math.floor(y0/s), math.ceil(y1/s)
-        # origin: this level's tile (tx0,ty0) in 3857, y measured downward
-        ts = 2*MERC_HALF/(2**z)          # tile size in metres
-        ox = -MERC_HALF + tx0 * ts
-        oy =  MERC_HALF - ty0 * ts
+        ts = 2*MERC_HALF/(2**z)              # tile size in metres
+        mpp = ts / 256
+        # where the shared origin falls inside this level's own mosaic
+        mosaic_x = -MERC_HALF + tx0 * ts
+        mosaic_y =  MERC_HALF - ty0 * ts
+        crop_x = int(round((shared_x - mosaic_x) / mpp))
+        crop_y = int(round((mosaic_y - shared_y) / mpp))
+        assert crop_x >= 0 and crop_y >= 0, (z, crop_x, crop_y)
+        while (tx1 - tx0) * 256 - crop_x < ALIGN_MIN_PX: tx1 += 1
+        while (ty1 - ty0) * 256 - crop_y < ALIGN_MIN_PX: ty1 += 1
         out.append(dict(level=lvl, zoom=z, tx0=tx0, ty0=ty0,
                         tiles_x=tx1-tx0, tiles_y=ty1-ty0,
-                        width=(tx1-tx0)*256, height=(ty1-ty0)*256,
-                        mpp=2*MERC_HALF/(2**z)/256, ox=ox, oy=oy))
+                        crop_x=crop_x, crop_y=crop_y,
+                        width=(tx1-tx0)*256 - crop_x,
+                        height=(ty1-ty0)*256 - crop_y,
+                        mpp=mpp, ox=shared_x, oy=shared_y))
     return out
 
 def path(z, x, y):
@@ -89,12 +119,13 @@ def fetch(ls):
     print(f"done: {got} fetched, {skipped} already cached, {time.time()-t0:.0f}s")
 
 def mosaic(l):
-    W, H = l['width'], l['height']
-    im = Image.new("RGB", (W, H))
+    """the level's tiles as one image, cut to start at the shared origin"""
+    im = Image.new("RGB", (l['tiles_x']*256, l['tiles_y']*256))
     for j in range(l['tiles_y']):
         for i in range(l['tiles_x']):
             im.paste(Image.open(path(l['zoom'], l['tx0']+i, l['ty0']+j)).convert("RGB"), (i*256, j*256))
-    return im
+    x, y = l['crop_x'], l['crop_y']
+    return im.crop((x, y, x + l['width'], y + l['height']))
 
 def build_palette(ims, per_level=250_000, seed=7):
     """one shared 256-entry palette, cut from a uniform random pixel sample taken
@@ -211,6 +242,15 @@ def verify(p):
     print(f"{p}: v{pk['version']} '{pk['name']}' {pk['total']} B, {pk['nlev']} levels")
     ls = levels()
     ok = True
+    # the one invariant the navigation depends on: all levels share an origin
+    origins = {(lv['ox'], lv['oy']) for lv in pk['levels']}
+    if len(origins) == 1:
+        ox, oy = origins.pop()
+        print(f"  origin 3857 ({ox:.0f}, {oy:.0f}) shared by all {pk['nlev']} levels")
+    else:
+        print(f"  origins differ across levels: {sorted(origins)}")
+        print("     ^^ FAILS alignment: a level crossing will jump the centre")
+        ok = False
     for lv, l in zip(pk['levels'], ls):
         src = np.asarray(mosaic(l), np.int16)
         got = lv['rgb'].astype(np.int16)

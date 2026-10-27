@@ -124,7 +124,29 @@
   emit that needed it, which put the next line into the blocking path too and
   cascaded for four lines -- the frame-top corruption.  The user reports pan and
   zoom work; the frame top has not been confirmed separately.
-- **Fixed this cycle - the first lines of every frame.** The corruption was
+- **Fixed this cycle - level crossings keep the centre.** Zooming in or out
+  across the four levels used to walk the picture sideways, one jump at each
+  boundary, and the cause was alignment: `maps_pack.py` cut each level on its
+  own tile grid, so the four origins were 128 to 192 pixels apart while
+  `maps_nav` crosses a level by doubling or halving the coordinates -- correct
+  only when every level puts pixel (0,0) on the same ground point. The fabric
+  cannot detect the mismatch because the level table it is given carries no
+  origin, so the fix went into the pack: `levels()` takes the finest level's
+  corner as the shared origin and crops every mosaic to begin there, adding a
+  ring of tiles where cropping would leave a coarse level under 640 px -- the
+  width a step-0.5 screen shows, which is where a crossing lands. The offsets
+  are whole pixels of each coarse grid, so nothing is resampled. `verify` fails
+  a pack whose origins disagree and `load_pack.py` refuses to send one, so the
+  guarantee sits in mechanism rather than in a comment. The pack is now 27.62
+  MiB (L0 4608x4608, L1 2304x2432, L2 1152x1216, L3 832x864) all sharing origin
+  3857 (-12486753, 3966165); the crossing arithmetic checks out to under 0.001
+  pixel at every level, and the user reports zooming in and out staying put. No
+  RTL logic changed and no bitstream was rebuilt; the board still runs
+  `df0b0e056c49`. The levels do not cover identical ground -- L3 spans 32 km
+  against L0's 22 -- so panning to a coarse level's outer margin and zooming
+  back in clamps at the finer level's edge, which is unavoidable given a 640 px
+  minimum and a 576 px common rectangle at z12.
+- **Fixed in the cycle before this - the first lines of every frame.** The corruption was
   never in the line store and never a matter of the renderer being late.  Three
   instruments settled it in order.  A capture with the store tagged by line
   identity showed the store always holding the right line.  A stale-read marker,

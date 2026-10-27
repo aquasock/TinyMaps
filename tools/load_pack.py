@@ -31,15 +31,29 @@ HDR, ENT = 56, 40
 
 
 def levels_of(path):
-    """(index, offset, width, height, bytes) for each level, from the header."""
+    """(index, offset, width, height, bytes) for each level, from the header.
+
+    Refuses a pack whose levels do not share one origin.  The navigation in the
+    fabric crosses levels by doubling or halving the source coordinates, which
+    is only true of a shared origin; a pack cut on each zoom's own tile grid
+    makes the picture jump at every crossing, and the board has no way to know
+    or correct it -- the level table carries no origin.  So the check lives
+    here, before anything is sent.
+    """
     b = open(path, "rb").read()
     magic, _ver, nlev, _po, _pl, total, _hc = struct.unpack_from("<4sHHIIII", b, 0)
     if magic != b"TMPK":
         raise SystemExit(f"{path} is not a pack")
-    out = []
+    out, origins = [], set()
     for i in range(nlev):
-        off, w, h = struct.unpack_from("<III", b, HDR + ENT*i)
+        off, w, h, _mpp, _z, ox, oy = struct.unpack_from("<IIIIIii", b, HDR + ENT*i)
+        origins.add((ox, oy))
         out.append((i, off, w, h, b[off:off + w*h]))
+    if len(origins) != 1:
+        raise SystemExit(
+            f"{path} is not aligned: its levels have {len(origins)} different origins "
+            f"{sorted(origins)}.  Each level must start at one shared ground point "
+            "or a level crossing will jump the centre; rebuild it with tools/maps_pack.py.")
     return out, total
 
 

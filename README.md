@@ -232,17 +232,17 @@ unused).
     tools/maps_pack.py verify <pack>
     tools/maps_pack.py preview <pack>
 
-A pack holds four tile-aligned levels of one 18.4 km square, finest first, as
-8-bit indices into one shared 256-entry palette:
+A pack holds four levels of one 18.4 km square, finest first, as 8-bit indices
+into one shared 256-entry palette, every level cut to a single shared origin:
 
 | level | zoom | merc m/px | raster | size |
 |---|---|---|---|---|
 | L0 | z15 | 4.777 | 4608x4608 | 20.25 MiB |
-| L1 | z14 | 9.555 | 2304x2560 | 5.62 MiB |
-| L2 | z13 | 19.109 | 1280x1280 | 1.56 MiB |
-| L3 | z12 | 38.219 | 768x768 | 0.56 MiB |
+| L1 | z14 | 9.555 | 2304x2432 | 5.34 MiB |
+| L2 | z13 | 19.109 | 1152x1216 | 1.34 MiB |
+| L3 | z12 | 38.219 | 832x864 | 0.69 MiB |
 
-28.00 MiB total, 87.5% of the dock's 32 MiB SDRAM.
+27.62 MiB total, 86.3% of the dock's 32 MiB SDRAM.
 
 Pack layout, little-endian:
 
@@ -261,9 +261,29 @@ Pack layout, little-endian:
            u32 tiles x, u32 tiles y, u32 raster CRC-32
     then the palette, then the rasters back to back.
 
-Origins are the EPSG:3857 metres of the level's pixel (0,0) centre. Coarser
-levels are tile-aligned supersets of L0's ground rectangle, so each carries its
-own origin.
+Origins are the EPSG:3857 metres of the level's pixel (0,0). **All four levels
+carry the same origin**, which is the finest level's tile corner, and that is a
+requirement rather than a coincidence: the navigation crosses a level by
+doubling or halving the source coordinates, which is only true when every level
+puts its pixel (0,0) on the same ground point. Cutting each level on its own
+tile grid instead leaves the four corners up to a couple of hundred pixels
+apart, and the picture then jumps at every crossing -- the level table the
+fabric is given carries no origin, so it cannot correct for it.
+
+So `levels()` takes the finest level's corner as the shared origin and crops
+every level's mosaic to begin there. The offsets are exact whole pixels of each
+coarse grid, because a level's pixels are a power-of-two subdivision of the same
+ground, so nothing is resampled: every pixel kept is the tile's own. A level
+that would be left narrower than 640 px by the crop gains a ring of tiles on the
+right and bottom, because 640 is what a screen at step 0.5 shows and a crossing
+lands on a step of 0.5. `maps_pack.py verify` fails a pack whose levels disagree
+about the origin, and `tools/load_pack.py` refuses to send one.
+
+The levels therefore cover L0's ground and, for the coarser ones, more of it --
+32 km across for L3 against L0's 22 -- but not the same rectangle, which cannot
+be helped: a level must be at least 640 px wide to fill the screen, and the
+common rectangle at z12 is only 576. Panning to the outer margin of a coarse
+level and zooming back in clamps at the finer level's edge there.
 
 ## Renderer
 
