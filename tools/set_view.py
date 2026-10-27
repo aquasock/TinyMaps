@@ -94,17 +94,27 @@ def main():
     ap.add_argument("--level", type=int, default=3)
     ap.add_argument("--x", type=int, help="centre, in level pixels")
     ap.add_argument("--y", type=int)
-    ap.add_argument("--step", type=float, help="Q16.16 override in (0.5, 1]")
+    ap.add_argument("--step", type=float, help="Q16.16 override in (0.25, 1]")
+    ap.add_argument("--base", type=lambda v: int(v, 0),
+                    help="show an image at this SDRAM address instead of a pack level")
+    ap.add_argument("--width", type=int)
+    ap.add_argument("--height", type=int)
     ap.add_argument("--port", default="/dev/ttyACM0")
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--no-pipe", dest="tinytang", action="store_false", default=True)
     ap.add_argument("-q", "--quiet", action="store_true")
     args = ap.parse_args()
 
-    levels = levels_of(args.pack)
-    if not 0 <= args.level < len(levels):
-        raise SystemExit(f"no level {args.level} in {args.pack}")
-    lv = levels[args.level]
+    if args.base is not None:
+        if not (args.width and args.height):
+            raise SystemExit("--base needs --width and --height")
+        lv = dict(index=0, base=args.base, w=args.width, h=args.height,
+                  mpp=0.0, zoom=0)
+    else:
+        levels = levels_of(args.pack)
+        if not 0 <= args.level < len(levels):
+            raise SystemExit(f"no level {args.level} in {args.pack}")
+        lv = levels[args.level]
     x0, y0, q = viewport_for(lv, args.x, args.y, args.step)
 
     port = serial.Serial(args.port, args.baud, timeout=0.02)

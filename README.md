@@ -8,20 +8,46 @@ and the apicula fork).
 
 ## State
 
-Phases 0 to 3 are done and verified by simulation. The integration **closes
-timing** -- `hclk` at 83.06 MHz against the 74.25 MHz a 720p line needs, at
-placement seed 1 -- so the flow packs a bitstream, and that bitstream runs on
-the Tang. The pack loader works on hardware too: an image sent over the BL616's
-UART lands in the SDRAM and is drawn, which was checked on 2026-10-26 with a
-known test image rather than by eye. An image appears in grey until a palette is
-sent with it, and with the pack's palette the real map is on screen.
+Phases 0 to 3 are done and verified by simulation. The integration closes
+timing, so the flow packs a bitstream, and that bitstream runs on the Tang. The
+pack loader works on hardware too: an image sent over the BL616's UART lands in
+the SDRAM and is drawn, which was checked on 2026-10-26 with a known test image
+rather than by eye. An image appears in grey until a palette is sent with it,
+and with the pack's palette the real map is on screen.
 
 Panning and zooming work, and `tools/read_status.py` reports the viewport the
 renderer is being given -- which is how the level-table defects that froze the
-picture into one repeated row were found. The top few lines of a frame were
-corrupt for a while; the cause was a refetch that landed after the line needing
-it, and the fix is in, though it has not been confirmed on hardware separately
-from panning. The first hardware capture also showed the levels
+picture into one repeated row were found.
+
+The top lines of every frame were corrupt for several cycles and are now fixed
+and confirmed on hardware. The rows were not stale and not late: a capture with
+the line store instrumented showed the store always held the right line, and a
+stale-read marker never once fired. The fault was in `maps_video_rd`, which
+started a new 256-byte line while the previous one was still open, because the
+renderer's fetch engine drops `f_busy` on the last entry it accepts rather than
+at the end of the SDRAM line. `sdram_ctrl` only queues a `vstart` and services it
+when idle, so the stray pulse scheduled an extra line, and the old line's
+`vdone` read as the new request's end-of-line and asked for one more: a row came
+back one SDRAM line out of place. Only the blocking refetch path issues fetches
+back to back, which is why the damage was confined to the first lines of a frame
+and to the lines after a pan, and why which fetch it hit depended on SDRAM
+latency. The adapter now holds a request until the channel is idle and inserts
+one clear cycle between lines; `sim/tb_maps_line_store.sv` runs the real
+renderer behind the real store and found sixty vstarts during a live line
+before the fix and none after.
+
+That testbench exists because the fault was invisible to everything else: the
+renderer's own testbench bypasses the adapter, and a model of the channel that
+behaves better than `sdram_ctrl` does not reproduce it.
+
+**Timing has much less margin than this file used to claim.** An eight-seed
+sweep of the current design gives `hclk` between 66.63 and 75.65 MHz against the
+74.25 MHz a 720p line needs, and seven of the eight seeds fail. The 83 to 96 MHz
+figures recorded earlier were particular placements, not the design's margin.
+Seed 7 is the build that ships; any further logic needs the critical path found
+and shortened rather than the seed re-rolled.
+
+The first hardware capture also showed the levels
 lifted and clipped at the top -- the sink reading full-range RGB as limited
 range -- so the AVI InfoFrame now declares full range, and that build is on the
 board. The declaration does not change what a capture of the output shows: the

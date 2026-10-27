@@ -10,11 +10,13 @@
   renderer's addressing at once. The palette now arrives over the link too, so
   the screen shows the real Phoenix map in its own colours, all four pack levels
   load over the link, and command `0x0A` switches between them without a
-  reload. Two things are open:
-  the picture arrives lifted and clipped at the top because the sink treats the
-  RGB as limited range, and the first five lines of each frame are drawn from
-  stale rows (measured 2026-10-26: rows 0-4 wrong, rows 5 and below matching the
-  level at correlation 0.70-0.91).
+  reload. The top lines of every frame are now correct and confirmed on
+  hardware: rows 0-20 are pixel-identical in a capture, where before rows 0-3
+  were 20-85 levels out and changed every frame. One thing is open in the
+  picture: a capture shows the levels lifted and clipped at the top because the
+  capture path treats the RGB as limited range, which the source declaration
+  does not change. One thing is open in timing: `hclk` has far less margin than
+  this file used to record.
 
 - **Landed:** `79bd168` scaffold + pack builder · `1e1de8f` Phase 0 skeleton ·
   `2e8ea8e` Phase 2 load receiver · `dbcf8e1` Phase 3 nearest renderer ·
@@ -58,9 +60,11 @@
     arbitration.** The A25 port and the video channel are separate ports on
     `sdram_ctrl`, which gives a pending video line priority, so a load cannot
     stall a scanline. Nothing else arbitrates.
-  - **Operating range is `step` in (0.5, 1]** — source pixels per output pixel,
+  - **Operating range is `step` in (0.25, 1]** — source pixels per output pixel,
     so *below* 1 is magnifying. Above 1 a source row can advance by two per line
-    and row rotation cannot engage.
+    and row rotation cannot engage. The floor was 0.5 while the finest pack level
+    had no finer neighbour to hand over to; it moved to 0.25 when the zoom was
+    made to keep magnifying there.
   - **The viewport constants are set for a 768x768 level at SDRAM byte 0 with
     step 0.600006** (0.6 × 1280 = 768, so the level fills the line exactly).
     That is both the test image's geometry and the pack's L3 level.
@@ -108,6 +112,31 @@
   emit that needed it, which put the next line into the blocking path too and
   cascaded for four lines -- the frame-top corruption.  The user reports pan and
   zoom work; the frame top has not been confirmed separately.
+- **Fixed this cycle - the first lines of every frame.** The corruption was
+  never in the line store and never a matter of the renderer being late.  Three
+  instruments settled it in order.  A capture with the store tagged by line
+  identity showed the store always holding the right line.  A stale-read marker,
+  painted per row and defined as the writer writing the slot being read while at
+  or behind the reader, never fired in 329 frames.  A testbench that runs the
+  real renderer behind the real store with a static viewport produced two
+  identical frames, 0 of 921,600 pixels apart, once a faithful model of
+  `sdram_ctrl`'s video channel was in the path.  The fault was in
+  `maps_video_rd`: the renderer drops `f_busy` on the last entry it accepts,
+  which is not the end of the 256-byte SDRAM line, so a request that arrived
+  while a line was still open reloaded `base`, `skip` and `left` and fired
+  `vstart` under it.  `sdram_ctrl` only queues a `vstart` and services it when
+  idle, so the stray pulse scheduled an extra line, and the old line's `vdone`
+  then read as the new request's end-of-line and asked for one more: a row came
+  back one SDRAM line out of place.  Only the blocking path issues fetches back
+  to back, which is why the damage was the first lines of a frame and the lines
+  after a pan, and why which fetch it hit varied with SDRAM latency.  The
+  adapter now holds a request until the channel is idle and leaves one clear
+  cycle between lines.  Measured before and after on the same testbench: 60
+  vstarts during a live line, then none.
+- **Timing, measured properly this cycle.**  An eight-seed sweep of the design
+  that ships gives `hclk` between 66.63 and 75.65 MHz against 74.25, and seven
+  of the eight fail; seed 7 passes and is the bitstream deployed.  The 83-96 MHz
+  figures recorded earlier in this file were single placements, not margin.
 - **Zoom range (this cycle):** the five-entry step table is gone.  A turn now
   multiplies the step by about 1/1.078 -- nine steps to the octave instead of
   five at 19% -- and a level crossing normalises to exactly 1.0 or 0.5 so the

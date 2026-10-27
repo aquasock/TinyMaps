@@ -649,3 +649,39 @@ Deploy `tinymaps.109ea3a8822d.bin` when the link is stable and try the wheel: ea
 - User Test: NOT RUN
 
 ---
+
+## 19 COMMIT Unreleased 2026-10-26T17:14:32-07:00
+
+#### Coming From:
+
+Unreleased e7e91e4
+
+#### Purpose:
+
+Find and fix the corrupt pixels at the top of every frame, which had survived four earlier attempts and were the oldest open defect in the picture.
+
+#### Outcome:
+
+The corruption was in `maps_video_rd`, not in the line store and not a matter of the renderer being late, and three instruments narrowed it in that order. A build that tagged each store slot with the line identity it held showed, from a capture, that the store always served the right line; a stale-read marker painted per row, defined as the writer writing the slot being read while at or behind the reader, never fired across 329 recorded frames; and `sim/tb_maps_line_store.sv`, new this cycle, runs the real `maps_render` behind the real store arithmetic with a static viewport and produced two frames identical to all 921,600 pixels, so the schedule does not race when memory latency is fixed. Two hypotheses were tested and rejected on the way: giving line 0 five blanking lines instead of one moved the worst row's frame-to-frame deviation from 44.60 to 44.10 and was reverted, and an eight-slot store with a four-line lead bought the right margin but took `hclk` to 67.49 MHz, so it was reverted too. The real fault is that the renderer's fetch engine drops `f_busy` on the last entry it accepts, which is not the end of the 256-byte SDRAM line, so a request arriving while a line was still open reloaded `base`, `skip` and `left` and fired `vstart` under it; `sdram_ctrl` only queues a `vstart` and services it when idle, so the stray pulse scheduled an extra line, and the old line's `vdone` then read as the new request's end-of-line and asked for one more, putting a row one SDRAM line out of place. Only the blocking refetch path issues fetches back to back, which is why the damage was the first lines of a frame and the lines after a pan and why which fetch it hit varied with SDRAM latency. The adapter is now an explicit four-state machine that holds a request until the channel is idle and leaves one clear cycle between lines, and the same testbench measures sixty vstarts during a live line before the change and none after, so it stays as a regression gate. An eight-seed placement sweep of the finished design gives `hclk` between 66.63 and 75.65 MHz against 74.25 and only seed 7 passes, which means the 83 to 96 MHz figures recorded in earlier entries were single placements rather than the design's margin; the shipped artefact is `tinymaps.df0b0e056c49.bin`, 4,428,780 bytes, at 75.65 MHz with `clk` at 429.18 MHz against 21.49 and setup=0 hold=0. It was put on the card with `tangput`, programmed with `tangload`, probed on the link before any test data was sent, and loaded with the diagnostic pattern, its palette and the viewport that reproduced the fault. The user reports the picture perfect with no shimmer, and a capture corroborates it quantitatively: rows 0 to 20 sample identical source rows at this viewport and are now pixel-identical to each other, where before rows 0 to 3 were 20 to 85 levels out and changed every frame. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The picture has no known defect left, so the next work is the timing margin: find the critical path behind `hclk` and shorten it rather than re-rolling placement seeds, because seven of eight seeds failing at 74.25 MHz means the design has no headroom and the next logic change can cost the build. Two recorded defects are still open: the status readback's top byte reads wrong for bases above 16 MB, and the zoom ceiling still lets the finest level overshoot past its own width.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_video_rd.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_line_store.sv
+- tools/maps_test_pattern.py
+- tools/set_view.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

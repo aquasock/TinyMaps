@@ -180,12 +180,22 @@ wire line_tick = tog_f[2] ^ tog_f[1];
 // the line store is read before it is written, which is what put the previous
 // frame's last line at the top of the picture; the blanking is 30 lines and more
 // than covers the one discontinuity a frame has.
-// Open issue, measured on hardware: line 0 comes out right with the blanking to
-// draw it in, but lines 1 to 4 are still wrong.  Asking for line 1 in the
-// second blanking line as well made line 0 wrong again, so the renderer cannot
-// use more than one line of head start while the store has two slots.  The
-// cause of lines 1 to 4 is not established; see docs/HANDOFF.md.
-wire [9:0] rc_cy = (cy >= OUT_H) ? 10'd0 : cy + 10'd1;
+// Two lines ahead into four store slots.
+//
+// The lead has to cover a line, not an average line: a blocking line -- the
+// frame start, or the line after a pan -- fetches both rows and waits for the
+// third, so it costs three row fetches plus the emit.  At the hardware's
+// measured 1340 clocks a fetch that is 5300 clocks, 3.2 rasters against a
+// 1650-clock raster, which is more than the two rasters of lead this store
+// gives it.  A steady-state line rotates a buffer and costs one fetch plus the
+// emit, 1.6 rasters, which fits.  That is the shape of the symptom: the first
+// lines of a frame, corrupt on the right of each line, changing frame to frame.
+//
+// The first line of a frame is therefore given five blanking lines to itself
+// and the second line the remaining twenty-five.
+localparam int PREP0 = 5;              // blanking lines spent drawing line 0
+wire [9:0] rc_cy = (cy >= OUT_H) ? ((cy < OUT_H + PREP0) ? 10'd0 : 10'd1)
+                                 : cy + 10'd2;
 
 // A viewport change costs the renderer a blocking refetch of both rows -- about
 // 2680 clocks against the 1650 a line has -- so applying one mid-frame tears the
@@ -349,11 +359,11 @@ maps_link_rx u_loader (
 // Written on fclk by the renderer, read on hclk by the pixel path.  This is
 // deliberately flip-flops and not block RAM: Apicula's block RAM reads back
 // wrong on the GW5AST-138 when it is written on one clock and read on another.
-// The reader only ever looks at the buffer written during the previous line,
-// which is why the parity split is there.
-reg [7:0] lbuf [0:2*OUT_W-1];
+// Four lines, so the reader is looking at a slot the writer is not: the writer
+// runs two lines ahead and each line is a whole slot.
+reg [7:0] lbuf [0:4*OUT_W-1];
 always @(posedge hclk)
-    if (render_valid) lbuf[{rc_cy[0], render_x[10:0]}] <= render_idx;
+    if (render_valid) lbuf[{rc_cy[1:0], render_x[10:0]}] <= render_idx;
 
 // Synchronous read, so this is block RAM and not a multiplexer tree: an
 // asynchronous read of the whole array became distributed RAM and cost more
@@ -362,7 +372,7 @@ always @(posedge hclk)
 wire [11:0] rd_cx = (cx < OUT_W - 2) ? cx + 12'd2 : cx;
 reg  [7:0]  rd_q, rd_q2, rd_q3;
 always @(posedge hclk) begin
-    rd_q  <= lbuf[{cy[0], rd_cx[10:0]}];
+    rd_q  <= lbuf[{cy[1:0], rd_cx[10:0]}];
     rd_q2 <= rd_q;
     rd_q3 <= rd_q2;
 end
