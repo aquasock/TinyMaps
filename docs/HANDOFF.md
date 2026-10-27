@@ -124,7 +124,25 @@
   emit that needed it, which put the next line into the blocking path too and
   cascaded for four lines -- the frame-top corruption.  The user reports pan and
   zoom work; the frame top has not been confirmed separately.
-- **Added this cycle - the marker doubled and the hand pulls the right way.**
+- **Measured this cycle - the link, and 12 Mbaud ruled out.**  The BL616 link
+  was measured at 190 kB/s on 2 Mbaud (95% of its wire rate, so framing costs
+  about 5%) and at **431 kB/s on 5 Mbaud**, the same 4 MiB in 9.7 s against
+  22.0 s.  The oversampling is what sets the ceiling: sixteen samples a bit
+  needs sixteen clocks a bit, so the 74.25 MHz pixel clock cannot pass 4.64
+  Mbaud, and 5 Mbaud runs at eight samples with a bit 14.85 clocks wide.  The
+  plan to reach 12 Mbaud by putting the PHY on the 371.25 MHz TMDS clock failed
+  and is recorded so it is not retried: the receiver closes at 189 MHz against
+  371 (154 before the accumulator was narrowed from twenty bits to twelve), and
+  a baud accumulator is a feedback loop, so pipelining cannot split its depth.
+  12 Mbaud needs a ~200 MHz clock from the PLL.  On the BL616 side the rate only
+  moves when asked, so TinyTang gained `fpgabaud <rate>`, which sets UART1
+  directly without negotiating with the core; a mis-set rate is one command from
+  recovery, which was verified both ways on the board.  The 5 Mbaud build is
+  **marginal**: one of eight placement seeds passed at 74.97 MHz against 74.25,
+  where the previous build swept 78.44 to 82.41 with seven of eight, so the next
+  cycle measures the same tree at 2 Mbaud to see whether the constants cost
+  about six megahertz or the design was always this close to the wall.
+- **Added last cycle - the marker doubled and the hand pulls the right way.**
   Two corrections the user asked for after driving the first cursor build: the
   marker is thirty-two pixels instead of sixteen, with a four-pixel frame and a
   four-pixel crosshair so the proportions are unchanged, and a mouse drag now

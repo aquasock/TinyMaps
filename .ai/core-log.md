@@ -851,3 +851,39 @@ The margin is the outstanding engineering item: seven of eight seeds pass but th
 - User Test: PASS
 
 ---
+
+## 25 COMMIT Unreleased 2026-10-26T21:41:07-07:00
+
+#### Coming From:
+
+Unreleased ba03570
+
+#### Purpose:
+
+Find out what the BL616 link can actually deliver, after the streaming question made its 2 Mbaud rate the limit on everything the project wants to do next.
+
+#### Outcome:
+
+The link was measured before it was changed: 4 MiB loaded through the existing loader takes 22.0 s at 2 Mbaud, which is 190 kB/s and 95% of that UART's 200 kB/s wire rate, so the framing costs about 5% and the wire rate is the only lever. Raising the rate then needed the oversampling to change, because sixteen samples a bit needs sixteen clocks a bit and the 74.25 MHz pixel clock therefore cannot pass 4.64 Mbaud; eight samples a bit puts 5 Mbaud at 14.85 clocks, which is comfortable, and the same 4 MiB then takes 9.7 s -- **431 kB/s**, 2.27 times the 2 Mbaud figure. `LINK_BAUD` and `LINK_OVERSAMPLE` are parameters on the top and `OVERSAMPLE` is a parameter on both PHY modules, with the repository default left at 2 Mbaud and sixteen samples so the shipped design is unchanged. The attempt at 12 Mbaud failed and is recorded so nobody repeats it: the PHY was moved to the 371.25 MHz clock the TMDS serialiser owns, with a clock crossing built for it, and that domain closed at 154 MHz against the 371 it demands; narrowing the baud accumulator from twenty bits to twelve -- it only has to place its ticks, and twelve bits is 0.1% -- took it to 189 MHz, still half the required rate. Sharpening that number was the useful part: an accumulator is a feedback loop, so its logic depth cannot be pipelined across cycles however it is written, and 12 Mbaud needs a ~200 MHz clock this design does not have. The crossing module, its testbench and its entry in the synthesis source list were removed rather than left in the tree, and the PHY returned to the pixel clock with the oversampling parameterised. A new testbench pins the configuration that ships at speed: 256 bytes each way at 5 Mbaud with eight samples a bit, 8% jitter on every bit edge and a framing error dropped, and the older 12 Mbaud PHY testbench was kept because it is the evidence that the PHY itself is not the obstacle. Every testbench and both checkers pass. On the other side the rate only moves when asked, so TinyTang gained `fpgabaud <rate>`, which calls `tang_fpga_set_baud` directly instead of negotiating with the core; built with the xpack RISC-V compiler against the SDK at its pinned commit, flashed over USB, and verified on the board: the command answered and refused an unoffered rate, and a switch to 12 Mbaud silenced a 2 Mbaud core and a switch back restored it, so a mis-set rate is one command from recovery rather than a power cycle. The 5 Mbaud build is **deployed and measured but marginal**: one of eight placement seeds passed, seed 7 at 74.97 MHz against 74.25, where the previous build swept 78.44 to 82.41 with seven of eight passing. That regression is not yet understood; the next cycle measures the same tree at 2 Mbaud and sixteen samples to separate the constants from the design's existing margin. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Build the same tree at 2 Mbaud and sixteen samples, at the two seeds whose 5 Mbaud numbers are known, to decide whether the link constants cost about six megahertz of timing or whether this design has always been this close to the wall; either answer leads to the renderer's row-buffer to SDRAM routing, which is 4.5 ns of placement rather than an expression to split. Then the streaming architecture the bandwidth numbers were gathered for: a tile pool with a page table, a fetch engine that can follow a tile map across a 256-pixel boundary, and a miss falling back to the next coarser level. The TinyTang `fpgabaud` patch is committed in its own repository. The two small defects and the board's shorted power input are unchanged.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_uart_rx.sv
+- fpga/tinymaps/maps_uart_tx.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_uart_5m.sv
+- sim/tb_maps_uart_fast.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

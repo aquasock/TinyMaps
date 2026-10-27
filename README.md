@@ -55,6 +55,22 @@ That testbench exists because the fault was invisible to everything else: the
 renderer's own testbench bypasses the adapter, and a model of the channel that
 behaves better than `sdram_ctrl` does not reproduce it.
 
+**The link to the BL616 is the real ceiling on loading**, and it has been
+measured rather than assumed: 190 kB/s at the board's 2 Mbaud, which is 95% of
+that UART's wire rate, so the framing costs about 5% and there is nothing else
+to win there.  At 5 Mbaud the same 4 MiB load takes 9.7 s instead of 22.0 s --
+**431 kB/s**, 2.27 times faster -- and `LINK_BAUD` and `LINK_OVERSAMPLE` are
+parameters on the top for it.  The oversampling is the constraint: sixteen
+samples a bit needs sixteen clocks a bit, which caps a 74.25 MHz clock at
+4.64 Mbaud, so 5 Mbaud runs at eight samples and a bit is still 14.85 clocks
+wide.  12 Mbaud was tried and abandoned: it needs the 371.25 MHz clock the TMDS
+serialiser owns, and the receiver with its baud accumulator closes at 189 MHz
+against the 371 that domain demands -- a feedback loop that cannot be pipelined
+to close a 2x gap.  Getting there needs a ~200 MHz clock the design does not
+have.  The rate is a property of both ends: the BL616 only moves when asked,
+with `fpgabaud` in its shell (a TinyTang patch this cycle), and a core built for
+one rate against a link at the other is silent until one of them moves.
+
 **Timing margin was found and fixed.** An eight-seed sweep before the fix gave
 `hclk` between 66.63 and 75.65 MHz against the 74.25 MHz a 720p line needs, with
 seven seeds failing and the best one passing by 1.4 MHz; the 83 to 96 MHz

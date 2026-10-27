@@ -18,8 +18,19 @@
 `timescale 1ns / 1ps
 
 module maps_uart_rx #(
-    parameter int CLK_HZ = 74_250_000,
-    parameter int BAUD   = 2_000_000
+    parameter int CLK_HZ    = 74_250_000,
+    parameter int BAUD      = 2_000_000,
+    // Both sides of the accumulator are shifted down by this, so a fast clock
+    // does not need a wide adder.  The ratio is kept to 1/2**ACC_SHIFT, which at
+    // twelve is 0.02% -- far inside what a UART tolerates, and the average bit
+    // stays exact rather than quantised to whole clocks.
+    // samples per bit: sixteen is the classic, eight is what a 5 Mbaud link on a
+    // 74.25 MHz clock allows and still leaves the mid-bit sample honest
+    parameter int OVERSAMPLE = 16,
+    parameter int ACC_SHIFT = 0,
+    // wide enough for the TOP it compares against: 74,250,000 needs 27 bits,
+    // and the scaled value at 371.25 MHz needs 17
+    parameter int ACC_W     = 28
 ) (
     input  wire       clk,
     input  wire       resetn,
@@ -28,17 +39,18 @@ module maps_uart_rx #(
     output reg        valid
 );
 
-localparam int INC = 16 * BAUD;          // 16 samples per bit
-localparam int ACC_W = 28;
+// 16 samples per bit, both sides of the comparison scaled by 2**ACC_SHIFT
+localparam int INC   = (OVERSAMPLE * BAUD) >> ACC_SHIFT;
+localparam int TOP   = CLK_HZ >> ACC_SHIFT;
 
 // 16x baud tick
 reg  [ACC_W-1:0] acc = '0;
 wire [ACC_W-1:0] acc_next = acc + INC[ACC_W-1:0];
-wire             tick     = acc_next >= CLK_HZ[ACC_W-1:0];
+wire             tick     = acc_next >= TOP[ACC_W-1:0];
 
 always @(posedge clk)
     if (!resetn) acc <= '0;
-    else         acc <= tick ? acc_next - CLK_HZ[ACC_W-1:0] : acc_next;
+    else         acc <= tick ? acc_next - TOP[ACC_W-1:0] : acc_next;
 
 // two-flop synchroniser: the pin is asynchronous to this clock
 reg [1:0] rx_s = 2'b11;
@@ -49,53 +61,58 @@ always @(posedge clk)
 // ------------------------------------------------------------------ receiver --
 localparam [1:0] R_IDLE = 2'd0, R_START = 2'd1, R_BITS = 2'd2, R_STOP = 2'd3;
 
+// the tick that lands in the middle of the start bit, and the one that ends a bit
+localparam int CNT_W = $clog2(OVERSAMPLE) < 1 ? 1 : $clog2(OVERSAMPLE);
+localparam [CNT_W-1:0] MID      = OVERSAMPLE / 2 - 1;     // middle of the start bit
+localparam [CNT_W-1:0] LAST_BIT = OVERSAMPLE - 1;         // a bit's last tick
+
 reg [1:0]  st;
-reg [3:0]  cnt;              // ticks within the current bit, 0..15
+reg [CNT_W-1:0] cnt;         // ticks within the current bit
 reg [2:0]  bitn;
 reg [7:0]  shift;
 
 always @(posedge clk) begin
     valid <= 1'b0;
     if (!resetn) begin
-        st <= R_IDLE; cnt <= 4'd0; bitn <= 3'd0; shift <= 8'd0; data <= 8'd0;
+        st <= R_IDLE; cnt <= '0; bitn <= 3'd0; shift <= 8'd0; data <= 8'd0;
     end else begin
         case (st)
             R_IDLE: if (!rx_s[1]) begin
                         st  <= R_START;
-                        cnt <= 4'd0;
+                        cnt <= '0;
                     end
 
             // eight ticks from the falling edge is the middle of the start bit
             R_START: if (tick) begin
-                        if (cnt == 4'd7) begin
+                        if (cnt == MID) begin
                             if (!rx_s[1]) begin
                                 st   <= R_BITS;
                                 cnt  <= 4'd0;
                                 bitn <= 3'd0;
                             end else st <= R_IDLE;   // a glitch, not a start bit
-                        end else cnt <= cnt + 4'd1;
+                        end else cnt <= cnt + 1'b1;
                     end
 
             // middle of each data bit, least significant first
             R_BITS: if (tick) begin
-                        if (cnt == 4'd15) begin
+                        if (cnt == LAST_BIT) begin
                             cnt   <= 4'd0;
                             shift <= {rx_s[1], shift[7:1]};
                             if (bitn == 3'd7) st <= R_STOP;
                             else              bitn <= bitn + 3'd1;
-                        end else cnt <= cnt + 4'd1;
+                        end else cnt <= cnt + 1'b1;
                     end
 
             // middle of the stop bit: high means the byte is good
             R_STOP: if (tick) begin
-                        if (cnt == 4'd15) begin
-                            cnt <= 4'd0;
+                        if (cnt == LAST_BIT) begin
+                            cnt <= '0;
                             st  <= R_IDLE;
                             if (rx_s[1]) begin
                                 data  <= shift;
                                 valid <= 1'b1;
                             end
-                        end else cnt <= cnt + 4'd1;
+                        end else cnt <= cnt + 1'b1;
                     end
         endcase
     end

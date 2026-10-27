@@ -26,7 +26,13 @@
 `timescale 1ns / 1ps
 
 module tinymaps_top #(
-    parameter int VIDEOID = 4                 // VIC 4 = 1280x720p60
+    parameter int VIDEOID = 4,                // VIC 4 = 1280x720p60
+    // The BL616 link's rate: 2 Mbaud is the board's default, and a faster rate
+    // needs the same value on the other end (`fpgabaud` in the shell).  The
+    // oversampling follows from it -- sixteen samples a bit needs sixteen clocks
+    // a bit, and this clock is 74.25 MHz.
+    parameter int LINK_BAUD       = 2_000_000,
+    parameter int LINK_OVERSAMPLE = 16
 ) (
     input         sys_clk,                    // 50 MHz crystal
 
@@ -333,13 +339,21 @@ sdram_ctrl #(.CL(3), .INIT_CYCLES(15000), .REFRESH_CYCLES(525)) u_sdram (
     .sdram_dqm(sdram_dqm), .sdram_dq(sdram_dq)
 );
 
-maps_uart_rx #(.CLK_HZ(74_250_000), .BAUD(2_000_000)) u_uart_rx (
-    .clk(hclk), .resetn(rstn_h), .rx(uart_rx),
-    .data(urx_data), .valid(urx_valid));
+// The PHY stays on the pixel clock.  It was moved to the 371.25 MHz clock, which
+// the TMDS serialiser already needs, to reach 12 Mbaud -- sixteen samples a bit
+// needs sixteen clocks a bit, and 74.25 MHz therefore caps the link at 4.64
+// Mbaud.  That domain could not host it: the baud accumulator, its compare and
+// the receiver state machine close at 189 MHz against the 371 the serializer
+// demands, and a feedback loop cannot be pipelined to fix it.  So the link runs
+// here at 5 Mbaud with eight samples a bit, which is 14.85 clocks a bit and fits
+// with the mid-bit sample intact, and 12 Mbaud waits for a ~200 MHz clock.
+maps_uart_rx #(.CLK_HZ(74_250_000), .BAUD(LINK_BAUD), .OVERSAMPLE(LINK_OVERSAMPLE))
+    u_uart_rx (.clk(hclk), .resetn(rstn_h), .rx(uart_rx),
+               .data(urx_data), .valid(urx_valid));
 
-maps_uart_tx #(.CLK_HZ(74_250_000), .BAUD(2_000_000)) u_uart_tx (
-    .clk(hclk), .resetn(rstn_h), .start(utx_start), .data(utx_data),
-    .tx(uart_tx), .busy(utx_busy));
+maps_uart_tx #(.CLK_HZ(74_250_000), .BAUD(LINK_BAUD), .OVERSAMPLE(LINK_OVERSAMPLE))
+    u_uart_tx (.clk(hclk), .resetn(rstn_h), .start(utx_start), .data(utx_data),
+               .tx(uart_tx), .busy(utx_busy));
 
 maps_link_rx u_loader (
     .clk(hclk), .resetn(rstn_h),
