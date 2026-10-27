@@ -1441,3 +1441,37 @@ The fetch window still runs past the level's right edge, which the host now answ
 - User Test: PASS
 
 ---
+
+## 42 COMMIT Unreleased 2026-10-27T13:29:35-07:00
+
+#### Coming From:
+
+Unreleased 80cd004
+
+#### Purpose:
+
+Stop the fetch window at the level's edge, and while doing it find why the coarse fallback drew nonsense.
+
+#### Outcome:
+
+The fetch count is now the window or the part of it inside the level, whichever is smaller, in entries and with no straddle slack at the edge -- one entry of slack asks for the first tile of the level next door, which does not exist either -- and the coarse pass halves the limit again because its level is half as wide. The testbench had to learn the level's bounds first: it models both levels' tile grids and counts any request outside them, and before the fix it reproduced the board exactly, asking for `L1 3,0` where the grid is three wide. After it, a view hard against the level's right edge draws all sixty-four of its pixels with nothing asked for outside the grid. Underneath was a better find. `k0`, the window base the emit stage subtracts from the pixel's own entry index, was latched one state before the blocking fetch; a miss there flips the picture to the coarser level, so the fetch landed coarse rows under a fine base, `rd_idx` underflowed, and every pixel of a fallback line came from thirty-three entries away -- which is exactly the `0x37` measured against the `0xce` expected. `k0` now follows the window the rows actually arrived from, which is right for both paths and both scales, and the fallback line is pixel-exact in simulation for the first time since it was written. Two smaller things came out of the build. The critical path had moved to the request queue's `taken` bit running through `req_hold` into the loader's busy input and the transmitter's data mux and so into the UART's shift register, and it refused to pack at first: `req_hold` is registered now, one cycle of latency the loader cannot notice because it cannot offer a byte in the cycle it is told to wait. And the clamp's own arithmetic was cut from thirty-two bits to sixteen, since a level is at most 65535 pixels wide. The fallback's test also had two assertions that were simply wrong about the system: it demanded a line that never asks for another tile, which is a property of a fully resident view and not of streaming at all. Seventeen of seventeen testbenches pass with `check_render` and `check_tmds`, and eight of eight seeds pack from 80.84 to 92.28 MHz, seed 5 at 92.28. Nothing was deployed, on the user's instruction, so the board still runs `tinymaps.46ea1fa2bbf5.bin`. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+On hardware next: the same level-3 view, which should now stop asking for the tiles past the map's right edge -- the server no longer has to answer anything blank -- and a fine level, z15, where the pool cannot hold the view and the fallback, the re-requests and the epoch all do real work. That is also the first test where `k0`'s repair is exercised on the board. After that the request queue's pending set, prefetch and eviction, and 4bpp. The `TILE_RETRY` epoch is still 28 ms, chosen when a request was assumed to take a fifth of a tile's flight; a fine level will say whether that is the right number.
+
+#### Files Modified:
+
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_render.sv
+- fpga/tinymaps/maps_tile_req.sv
+- sim/tb_maps_stream.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

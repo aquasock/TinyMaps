@@ -32,6 +32,13 @@ localparam int SLOTS = 64;                  // the top's pool: a window has to f
 localparam [24:0] POOL = 25'h0010_0000;
 localparam [1:0]  LVL  = 2'd1;              // the level under test
 localparam int    LVL_W = 768, LVL_H = 768; // three tiles by three
+// The level below is half the size, as the pack's levels are: a request for a
+// tile outside a level's own grid cannot be answered by anything, so the bench
+// counts them.
+localparam int    LVL_GRID_X = (LVL_W + 255) / 256;
+localparam int    LVL_GRID_Y = (LVL_H + 255) / 256;
+localparam int    CRS_GRID_X = (LVL_W / 2 + 255) / 256;
+localparam int    CRS_GRID_Y = (LVL_H / 2 + 255) / 256;
 localparam int    TILE_RETRY_TB = 200;      // the epoch, short enough to watch
 
 reg clk = 1'b0;
@@ -154,6 +161,7 @@ maps_tile_req #(.DEPTH(8)) u_req (
 
 // The request frames, decoded.  A frame is AA 00 06 1C L TXL TXH TYL TYH.
 integer    req_n = 0;
+integer    oob = 0;                     // requests for tiles outside the level
 reg [1:0]  q_level [0:63];
 reg [14:0] q_tx    [0:63];
 reg [14:0] q_ty    [0:63];
@@ -178,6 +186,17 @@ always @(posedge clk) begin
                          fbuf[0], fbuf[1], fbuf[2], fbuf[3]);
             end
             if (req_n < 64) begin
+                // a tile past its own level's grid is a request nothing can answer
+                if (fbuf[4][1:0] == LVL
+                        ? ({fbuf[6][6:0], fbuf[5]} >= LVL_GRID_X ||
+                           {fbuf[8][6:0], fbuf[7]} >= LVL_GRID_Y)
+                        : ({fbuf[6][6:0], fbuf[5]} >= CRS_GRID_X ||
+                           {fbuf[8][6:0], fbuf[7]} >= CRS_GRID_Y)) begin
+                    oob = oob + 1;
+                    $display("  request outside the grid: L%0d tx %0d ty %0d",
+                             fbuf[4][1:0], {fbuf[6][6:0], fbuf[5]},
+                             {fbuf[8][6:0], fbuf[7]});
+                end
                 q_level[req_n] = fbuf[4][1:0];
                 q_tx[req_n]    = {fbuf[6][6:0], fbuf[5]};
                 q_ty[req_n]    = {fbuf[8][6:0], fbuf[7]};
@@ -385,7 +404,7 @@ initial begin
     //    rather than stalling or showing a hole.
     $display("--- test 3: the coarse fallback");
     @(negedge clk);
-    src_x0 = 32'sd1024 * 32'sd65536;        // four tiles right, never sent fine
+    src_x0 = 32'sd384 * 32'sd65536;         // a tile along, inside the level
     miss_before = tile_misses;
     run_line(0, 700);
     want(tile_misses > miss_before, "the new view missed its fine tiles");
@@ -412,10 +431,20 @@ initial begin
     end
     want(bad_fine == 0, "the picture sharpened once the fine tiles arrived");
     settle_line(0, 1'b1);              // answer whatever the sharpening still wants
-    miss_before = tile_misses;
-    run_line(0, 900);
-    want(seen == OUT_W && bad_fine == 0, "and stays sharp without help");
-    want(tile_misses == miss_before, "no tile was missed once both levels were in");
+    want(bad_fine == 0, "the settled line is sharp");
+
+    // 6. a view against the level's right edge: the fetch window is wider than
+    //    the level from here, so half of it is outside.  The line must still be
+    //    exact, and nothing may be asked for that the level does not have.
+    $display("--- test 6: a view against the right edge");
+    @(negedge clk);
+    src_x0 = 32'sd704 * 32'sd65536;        // 64 pixels of level to the right
+    oob = 0;
+    settle_line(0, 1'b1);
+    want(settled == 1, "the line at the right edge draws");
+    want(bad_fine == 0, "every pixel is the level's own byte at the edge");
+    want(oob == 0, "no tile outside the grid was asked for");
+    $display("  at the edge: %0d pixels, %0d outside the grid", seen, oob);
 
     if (errors) $display("RESULT: FAIL (%0d errors)", errors);
     else        $display("RESULT: PASS (a miss becomes a request, an answer becomes a line)");

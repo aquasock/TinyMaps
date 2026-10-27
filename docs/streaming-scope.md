@@ -367,14 +367,26 @@ testbench than from a rebuilt renderer.
   ESP32 took the lower numbers -- and the tools default to `/dev/ttyACM0`, so two
   attempts went to the wrong device.  Everything takes `--port`; picking the
   device by its `/dev/serial/by-id` name would be the fix in the tools.
-- **Still open:** the fetch window running past the level's right edge (the pool
-  answers those requests blank now, which is honest but wasteful), the fallback's
-  `k0` being the fine window start where it should be the coarse one, the request
-  queue asking two or three times for a tile already on its way, prefetch and
-  eviction, and 4bpp.  Also: the switch-mid-fetch repair is **not** covered by
-  simulation -- the bench passes with the guard and without it, and driving
-  `stream` from a register made the whole bench fail for reasons not chased, so
-  hardware is the only judge of that one.
+- **Done: the window stops at the level's edge, and the fallback's base follows
+  the rows it actually got.**  The fetch count is `min(SPAN, level_width/2 -
+  window_start)` -- in entries, with no straddle slack at the edge, because one
+  entry of slack asks for the first tile of the level next door, which does not
+  exist either -- and the coarse pass halves the limit again because its level is
+  half as wide.  The bench had to learn the level's bounds first: it now models
+  the grid of both levels and counts any request outside it, and before the clamp
+  it reproduced the board exactly, asking for `L1 3,0` where the grid is three
+  wide.  The bigger find was underneath.  `k0`, the window base the emit stage
+  subtracts, was latched one state before the blocking fetch, and a miss there
+  changes the scale -- so the fetch landed coarse rows under a fine base, `rd_idx`
+  underflowed, and every pixel of a fallback line came from 33 entries away.  It
+  now follows the window the rows actually came from (`k0 <= f_col` when they
+  land), which is right for both paths and both scales.  The fallback line is
+  pixel-exact in simulation for the first time since it was written.
+- **Still open:** the request queue asking two or three times for a tile already
+  on its way, prefetch and eviction, and 4bpp.  Also: the switch-mid-fetch repair
+  is **not** covered by simulation -- the bench passes with the guard and without
+  it, and driving `stream` from a register made the whole bench fail for reasons
+  not chased, so hardware was the only judge of that one.
 - **Next:** the clamp and the pending set, then a fine level where the pool cannot
   hold the view, which is what the fallback and the re-requests exist for.
 

@@ -260,7 +260,21 @@ wire [31:0] r0_e   = cfall ? (r0   >> 1) : r0;
 wire [31:0] r_ok_e = cfall ? (r_ok >> 1) : r_ok;
 wire [31:0] r_pf_e = cfall ? (r_pf >> 1) : r_pf;
 wire [31:0] k0_e   = cfall ? (k0_pf >> 1) : k0_pf;
-wire [15:0] cnt_e  = cfall ? ((SPAN[15:0] >> 1) + 16'd2) : SPAN[15:0];
+// How many entries to fetch: the window, or the part of it inside the level.
+// Fetching the whole span regardless read past the level's right edge -- harmless
+// on the pack path, where those entries are never displayed, and a request for a
+// tile that cannot exist once the pool is the source, which blocks the line on an
+// answer that can never come.  The coarse pass works in half-scale coordinates
+// against a level half as wide again, so its limit is a further halving.
+wire [15:0] ent_lim = cfall ? {2'd0, level_w[15:2]} : {1'b0, level_w[15:1]};
+// No straddle slack when the level's edge is what stops the window: the last
+// entry fetched has to be inside the level, or the fetch asks for the first tile
+// of the next one along, which does not exist either.
+// Sixteen bits, not thirty-two: a level is at most 65535 pixels wide, so its
+// entry count and the window's start both fit, and the compare and subtract are
+// half the carry chain of doing it wide.
+wire [15:0] room  = (k0_e[15:0] >= ent_lim) ? 16'd1 : (ent_lim - k0_e[15:0]);
+wire [15:0] cnt_e = (room > SPAN[15:0]) ? SPAN[15:0] : room;
 wire [31:0] x_e    = bcrs[cur] ? (acc_x >> 1) : acc_x;
 wire [31:0] e_new  = (x_e + 32'd65536) >>> 17;
 
@@ -325,6 +339,13 @@ always @(posedge clk or negedge resetn) begin
                 brow[f_buf] <= f_row;
                 bcrs[f_buf] <= cfall;
                 col_tag     <= f_col;
+                // The emit stage subtracts this from the pixel's own entry index,
+                // so it has to be the window these rows actually came from.  It
+                // used to be latched a state earlier, before the blocking fetch,
+                // and a miss there can change the scale: the fetch would then land
+                // coarse rows under a fine base, and every pixel of the line came
+                // out of the wrong place.
+                k0          <= f_col;
             end else if (src_miss && !cfall && can_fall) begin
                 // the view's own level could not answer: draw this line from the
                 // level below, which is the whole point of the fallback, and let
@@ -419,7 +440,11 @@ always @(posedge clk or negedge resetn) begin
 
         S_PLAN: begin
             r1 <= r_ok;
-            k0 <= k0_pf;
+            // the window the row buffers were actually fetched from, in the units
+            // of the scale they were fetched at: the emit stage subtracts this
+            // from the pixel's own entry index, so it has to be the coarse start
+            // when the rows came from the level below
+            k0 <= k0_e;
             if (win_ok && bval[cur] && brow[cur] == r0 &&
                 bval[nxt] && brow[nxt] == r_ok &&
                 bcrs[cur] == cfall && bcrs[nxt] == cfall) begin

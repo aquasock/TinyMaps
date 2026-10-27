@@ -350,7 +350,13 @@
   took them at 0.32 s each and drew, which the user passed.  The deployed image
   is `tinymaps.46ea1fa2bbf5.bin`.  Note the console is not always on
   `/dev/ttyACM0`: the Tang came back as `ttyACM2` once other boards were plugged
-  in, and every tool takes `--port`.  See `docs/streaming-scope.md`.
+  in, and every tool takes `--port`.  Since then the fetch window stops at the
+  level's edge, so the pool is no longer asked for tiles that cannot exist, and
+  the fallback's window base follows the rows it actually received -- a miss
+  changes the scale, and the base used to be latched before that could happen, so
+  every fallback pixel came from thirty-three entries away.  Both are
+  simulation-only: `sim/tb_maps_stream.sv` models the level's bounds now and
+  counts any request outside the grid.  See `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The

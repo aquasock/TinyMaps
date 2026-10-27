@@ -122,9 +122,18 @@ reg [3:0] bi = 4'd0;                   // which byte of the frame is being offer
 // queue and not counted is a request that never goes out.
 wire pop = (st == R_SEND) && tx_ack && (bi == LAST);
 
-// the line is ours only once a byte has been taken
+// the line is ours only once a byte has been taken, and the hold is registered:
+// it feeds the loader's busy input, which feeds the transmitter's data mux and
+// then the UART's shift register, and that chain was the critical path of the
+// whole design once the queue and the loader shared a transmitter.  One cycle of
+// latency buys nothing to argue about: the loader cannot offer a byte in the
+// cycle it is told to wait.
 reg taken;
-assign req_hold = (st == R_SEND) && taken;
+reg hold_r;
+always @(posedge clk)
+    if (!resetn) hold_r <= 1'b0;
+    else         hold_r <= (st == R_SEND) && taken;
+assign req_hold = hold_r;
 
 always @(posedge clk) begin
     if (!resetn) begin
