@@ -296,6 +296,22 @@ picture.
 Not implemented yet: the loader has no idle timeout (the `TIMEOUT` parameter is
 unused).
 
+## Streaming tiles
+
+A pool of 64 tiles sits above the pack, `0x01C0_0000` to the top of the part, and
+the core can draw from it instead of from the pack. `tools/maps_pack.py tiles
+--bits=8` builds the pack it reads: one 256-entry palette for the whole pack, the
+same table the pixel path uses, and 64 KiB records; 28.44 MiB for the ground the
+resident pack covers in 27.62, which is the whole reason for streaming.
+`tools/serve_tiles.py` answers the core's requests from that pack over the BL616
+pipe -- palette, then source switch, then `0x1D` blocks -- so a streaming test
+needs nothing on the board but this bitstream.
+
+A tile that is not in the pool is asked for by command `0x1C` and drawn meanwhile
+from the level below, two output pixels per coarse pixel, sharpening when the tile
+arrives. Nothing runs that way until a host says so with `0x1E`: with no answerer,
+the pool is empty and so is the picture.
+
 ## Map packs
 
 `tools/maps_pack.py` builds a pack from OpenTopoMap tiles.

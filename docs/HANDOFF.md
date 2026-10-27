@@ -329,7 +329,12 @@
   linear fetch and the sequencer's chunk read, waiting on command `0x1E` from a
   host that can serve tiles.  The pack remains the default, so the bitstream
   behaves as it did until something says otherwise.  What is missing is the tile
-  server on the TinyTang side.  See `docs/streaming-scope.md`.
+  server on the TinyTang side, and there is a host-side one now:
+  `tools/serve_tiles.py` answers the requests from an eight-bit tile pack over the
+  same BL616 pipe, so a streaming test needs no firmware on the other side.
+  `tools/maps_pack.py tiles --bits=8` builds that pack: 28.44 MiB for the ground
+  the resident pack covers in 27.62, against a 4 MiB pool.  See
+  `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The

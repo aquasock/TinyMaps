@@ -311,9 +311,22 @@ testbench than from a rebuilt renderer.
   arbiter actually takes, not from the offer, so a lost offer does not stall the
   answer that won; and the loader now waits for the line before it offers a reply
   byte, which is what stops an ACK starting inside a request frame.
-- **Next: the tile server on the TinyTang side**, which is what command `0x1E`
-  is waiting for, then prefetch and eviction -- which need the pool to report when
-  it is full -- and 4bpp in the pixel path.
+- **Done: a pack the fabric can read, and a server that answers.**  `maps_pack.py
+  tiles --bits=8` writes one 256-entry palette for the whole pack -- the table the
+  fabric's pixel path already reads -- and 64 KiB records with no per-tile
+  palette.  455 tiles over four levels, 28.44 MiB, and `verify-tiles` decodes every
+  one against its source: worst tile 4.0/255, against 9-10 for the four-bit pack,
+  which is what 256 colours buys.  Four bits a pixel is still written and still
+  verified; it waits for the pixel path to learn nibbles.  `tools/serve_tiles.py`
+  is the host half: it loads the pack's palette with command `0x08`, switches the
+  picture source with `0x1E`, then answers `0x1C` requests with `0x1D` blocks,
+  waiting for each ACK and re-sending a refused block.  It refuses a four-bit pack
+  outright rather than serving one the pixel path would paint with the wrong
+  twelve colours.
+- **Next: a hardware test**, which is now possible without firmware on the other
+  side: the pack is 28.44 MiB against a 4 MiB pool, so the very first pan is onto
+  ground that is not resident.  Then prefetch and eviction, which need the pool to
+  report when it is full, and 4bpp in the pixel path.
 
 **A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
 At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the

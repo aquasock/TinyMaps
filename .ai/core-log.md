@@ -1336,3 +1336,37 @@ The tile server on the TinyTang side: something has to decode the `0x1C` request
 - User Test: NOT RUN
 
 ---
+
+## 39 COMMIT Unreleased 2026-10-27T09:33:29-07:00
+
+#### Coming From:
+
+Unreleased 0173f5f
+
+#### Purpose:
+
+Build a tile pack the fabric can actually read and a host that answers its requests, so the streaming path can be tested on the board without firmware on the other side.
+
+#### Outcome:
+
+`tools/maps_pack.py tiles --bits=8` writes the pack the streaming path needs: one 256-entry palette for the whole pack, which is the table the fabric's pixel path already reads, and 64 KiB records carrying nothing but the tile's own bytes. The four-bit pack stays, and still verifies, because it is smaller and waits for the pixel path to learn nibbles; a palette count of 256 does not fit the header's one byte, so it is written as zero and read back as 256. The eight-bit pack is 455 tiles over four levels in 28.44 MiB, and `verify-tiles` decodes every one against its source: worst tile 4.0/255, against nine to ten for the four-bit pack, which is what 256 colours buy. `tools/serve_tiles.py` is the host half: it opens the BL616 pipe the way the loader tools do, loads the pack's palette with command 0x08, switches the picture source with 0x1E, then answers 0x1C requests with 0x1D blocks of a kilobyte, waiting for each ACK and re-sending a block that is refused, and it refuses a four-bit pack outright rather than serving one the pixel path would paint with the wrong twelve colours and no error. Its `--selftest` checks the framing, the tile lookup and the block CRC without a board, and given a pack it also reassembles a real 64 KiB tile from its 64 blocks at the finest level's last tile and the coarsest level's first, checking every header field and every CRC on the way -- both reassemble byte for byte. Two of the failures were the selftest being wrong rather than the tool: it expected a frame length that forgot the command byte, and it read a tile index as a byte value. Nothing in the fabric changed this cycle, so no build was run and the bitstream is the one from the last sweep at 77.97 to 83.51 MHz; nothing was deployed. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The hardware test this was built for: load the eight-bit pack's palette and coarse level, send `0x1E` to switch the picture to the pool, and pan onto ground that is not resident -- the pack is 28.44 MiB against a 4 MiB pool, so the first pan goes there. What to watch is a soft picture arriving and then sharpening, and what to instrument first if it does not is the request queue's depth, which is a wire in the top that nothing reports yet. After that, prefetch and eviction, which need the pool to say when it is full, and 4bpp in the pixel path.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- tools/maps_pack.py
+- tools/serve_tiles.py
+
+#### Status:
+
+- Build: N/A
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

@@ -9,7 +9,10 @@ and OpenStreetMap attribution.
   maps_pack.py fetch                download the tiles into the cache
   maps_pack.py pack                 build the pack file from the cache
   maps_pack.py verify <pack>        decode a pack and compare against the cache
-  maps_pack.py tiles [<out>]        build a 4bpp tile pack for streaming
+  maps_pack.py tiles [<out>] [--bits=8]
+                                    build a tile pack for streaming; eight bits
+                                    is what the fabric reads, four is smaller
+                                    and needs the pixel path to learn nibbles
   maps_pack.py verify-tiles <pack>  check every tile record's shape and indices
 """
 import json, math, os, struct, sys, time, zlib
@@ -191,13 +194,19 @@ def pack(ls):
 #   4   u16  version = 1
 #   6   u16  level count
 #   8   u32  tile pixels (256)
-#   12  u8   bits per pixel (4)
-#   13  u8   palette entries (16)
+#   12  u8   bits per pixel (4 or 8)
+#   13  u8   palette entries (16, or 0 for a 256-entry table: one byte cannot
+#            say 256)
 #   14  u16  zero
-#   16  u32  tile payload bytes (32768, the nibbles of one tile)
-#   20  u32  record bytes (16*3 + payload = 32816)
+#   16  u32  tile payload bytes (32768 at 4bpp, 65536 at 8bpp)
+#   20  u32  record bytes
 #   24  u32  tile data offset
 #   28  u32  total bytes
+#
+# At four bits a pixel a record carries its own 16-colour palette (48 bytes) and
+# then the nibbles.  At eight bits a pixel the pack carries one 256-entry palette
+# between the level table and the records -- the table the fabric's pixel path
+# already reads -- and a record is nothing but the tile's own bytes.
 #   32  u32  header CRC-32 over the header with this field zeroed, the level
 #            table and every tile record
 #   36  u8   name[32]
@@ -209,8 +218,24 @@ def pack(ls):
 # Every level shares the origin rule of the 8bpp pack: the finest level's tile
 # corner, so a level crossing stays a doubling of the coordinates.
 
-THDR, TENT, TREC = 68, 40, 48 + 256 * 256 // 2
-TSIZE, TBITS, TPAL = 256, 4, 16
+THDR, TENT = 68, 40
+TSIZE = 256
+
+
+def tile_shape(bits):
+    """(palette bytes in a record, payload bytes, record bytes) for a pack.
+
+    Four bits per pixel carries its own sixteen-colour palette in every record,
+    because sixteen colours chosen per tile is what makes a tile look like
+    itself.  Eight bits per pixel has one 256-entry palette for the whole pack,
+    which is the table the fabric's pixel path already reads, so a record is
+    nothing but the tile's own bytes.
+    """
+    if bits == 4:
+        return 48, TSIZE * TSIZE // 2, 48 + TSIZE * TSIZE // 2
+    if bits == 8:
+        return 0, TSIZE * TSIZE, TSIZE * TSIZE
+    raise ValueError(f"{bits} bits per pixel is not a pack this tool writes")
 
 
 def padded_mosaic(l):
@@ -229,27 +254,43 @@ def padded_mosaic(l):
     return out, gx, gy
 
 
-def tile_records(ls):
-    """(record bytes) for every tile, level order, row-major within a level"""
+def tile_records(ls, bits):
+    """(records, shared palette or None) for every tile, level order, row-major
+    within a level"""
+    _pal, _pay, rec = tile_shape(bits)
     out = []
+    shared = None
+    palimg = None
+    if bits == 8:
+        # one palette for the pack, cut from a sample of every level, so a tile
+        # is drawn through the table the fabric already has loaded
+        shared = build_palette([padded_mosaic(l)[0] for l in ls])
+        palimg = Image.new("P", (1, 1)); palimg.putpalette(shared)
     for l in ls:
         im, gx, gy = padded_mosaic(l)
         for ty in range(gy):
             for tx in range(gx):
                 box = (tx * TSIZE, ty * TSIZE, (tx + 1) * TSIZE, (ty + 1) * TSIZE)
                 t = im.crop(box)
-                q = t.quantize(colors=TPAL, method=Image.MEDIANCUT, dither=Image.NONE)
-                pal = bytes(q.getpalette()[:TPAL * 3]).ljust(TPAL * 3, b"\0")
-                idx = np.asarray(q, np.uint8)
-                assert idx.max() < TPAL, (idx.max(), tx, ty)
-                # two pixels a byte, high nibble first, row by row
-                packed = (idx[:, 0::2] << 4) | idx[:, 1::2]
-                out.append((pal, packed.astype(np.uint8).tobytes()))
-    return out
+                if bits == 8:
+                    q = t.quantize(palette=palimg, dither=Image.NONE)
+                    out.append((b"", np.asarray(q, np.uint8).tobytes()))
+                else:
+                    q = t.quantize(colors=16, method=Image.MEDIANCUT,
+                                   dither=Image.NONE)
+                    pal = bytes(q.getpalette()[:48]).ljust(48, b"\0")
+                    idx = np.asarray(q, np.uint8)
+                    assert idx.max() < 16, (idx.max(), tx, ty)
+                    # two pixels a byte, high nibble first, row by row
+                    packed = (idx[:, 0::2] << 4) | idx[:, 1::2]
+                    out.append((pal, packed.astype(np.uint8).tobytes()))
+    assert all(len(p) + len(x) == rec for p, x in out)
+    return out, shared
 
 
-def pack_tiles(ls, out_path):
-    recs = tile_records(ls)
+def pack_tiles(ls, out_path, bits=4):
+    _pbytes, _pay, TREC = tile_shape(bits)
+    recs, shared = tile_records(ls, bits)
     first = []
     grids = []
     n = 0
@@ -263,12 +304,14 @@ def pack_tiles(ls, out_path):
     body = bytearray()
     for pal, px in recs:
         body += pal + px
-    data_off = THDR + TENT * len(ls)
+    share = bytes(shared) if shared else b""
+    data_off = THDR + TENT * len(ls) + len(share)
 
     hdr = bytearray(THDR)
-    struct.pack_into("<4sHHIBBHIIII", hdr, 0, b"TMTL", 1, len(ls), TSIZE, TBITS, TPAL, 0,
-                     TSIZE * TSIZE // 2, TREC, data_off, data_off + len(body))
-    hdr[36:68] = b"Phoenix metro tiles 4bpp".ljust(32, b"\0")
+    struct.pack_into("<4sHHIBBHIIII", hdr, 0, b"TMTL", 2 if bits == 8 else 1, len(ls),
+                     TSIZE, bits, (256 if bits == 8 else 16) % 256, 0,
+                     _pay, TREC, data_off, data_off + len(body))
+    hdr[36:68] = f"Phoenix metro tiles {bits}bpp".encode().ljust(32, b"\0")[:32]
 
     tbl = bytearray()
     for l, f, (gx, gy) in zip(ls, first, grids):
@@ -278,15 +321,15 @@ def pack_tiles(ls, out_path):
     assert len(tbl) == TENT * len(ls)
 
     hdr[32:36] = b"\0\0\0\0"
-    crc = zlib.crc32(bytes(hdr) + bytes(tbl) + bytes(body))
+    crc = zlib.crc32(bytes(hdr) + bytes(tbl) + share + bytes(body))
     struct.pack_into("<I", hdr, 32, crc)
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "wb") as f:
-        f.write(hdr); f.write(tbl); f.write(body)
+        f.write(hdr); f.write(tbl); f.write(share); f.write(body)
     print(f"wrote {out_path}: {data_off + len(body)} bytes "
           f"({(data_off + len(body)) / 1048576:.2f} MiB), {n} tiles, "
-          f"{TBITS} bpp, header crc {crc:08x}")
+          f"{bits} bpp, header crc {crc:08x}")
     for l, f, (gx, gy) in zip(ls, first, grids):
         c = gx * gy
         print(f"  L{l['level']} z{l['zoom']}: {gx}x{gy} = {c} tiles "
@@ -299,8 +342,17 @@ def read_tiles(p):
     magic, ver, nlev, tsz, bits, pal, _z, pay, rec, doff, total = \
         struct.unpack_from("<4sHHIBBHIIII", b, 0)
     assert magic == b"TMTL", magic
-    assert tsz == TSIZE and bits == TBITS and pal == TPAL, (tsz, bits, pal)
-    assert rec == TREC and total == len(b), (rec, total, len(b))
+    pbytes, pay, rec = tile_shape(bits)
+    # the palette count is one byte, so a 256-entry table is written as zero
+    pal_entries = pal if pal else 256
+    assert tsz == TSIZE and pal_entries == (256 if bits == 8 else 16), \
+        (tsz, bits, pal_entries)
+    assert rec == struct.unpack_from("<I", b, 20)[0] and total == len(b), (rec, total, len(b))
+    table_end = THDR + TENT * nlev
+    # the shared palette, if this pack has one, sits between the level table and
+    # the records
+    share = b[table_end:doff]
+    assert len(share) in (0, 768), len(share)
     hdr = bytearray(b[:THDR]); hdr[32:36] = b"\0\0\0\0"
     want = struct.unpack_from("<I", b, 32)[0]
     assert zlib.crc32(bytes(hdr) + b[THDR:doff] + b[doff:total]) == want, "header crc"
@@ -308,15 +360,17 @@ def read_tiles(p):
     for i in range(nlev):
         tx, ty, z, mpp, ox, oy, first, _r = struct.unpack_from("<IIIIiiII", b, THDR + TENT * i)
         lvs.append(dict(level=i, tx=tx, ty=ty, zoom=z, mpp=mpp / 65536, ox=ox, oy=oy, first=first))
-    return dict(levels=lvs, data=b[doff:total], name=b[36:68].rstrip(b"\0").decode())
+    return dict(levels=lvs, data=b[doff:total], name=b[36:68].rstrip(b"\0").decode(),
+                bits=bits, rec=rec, pbytes=pbytes, pal=share)
 
 
 def verify_tiles(p):
     pk = read_tiles(p)
     ls = levels()
     ok = True
+    TREC = pk['rec']
     print(f"{p}: '{pk['name']}', {len(pk['levels'])} levels, "
-          f"{len(pk['data']) // TREC} tiles")
+          f"{len(pk['data']) // TREC} tiles, {pk['bits']} bpp")
     origins = {(lv['ox'], lv['oy']) for lv in pk['levels']}
     if len(origins) == 1:
         print(f"  origin 3857 {origins.pop()} shared by all levels")
@@ -329,15 +383,21 @@ def verify_tiles(p):
         bad = worst = 0
         for k in range(n):
             off = (lv['first'] + k) * TREC
-            pal = np.frombuffer(pk['data'][off:off + TPAL * 3], np.uint8).reshape(TPAL, 3)
-            px = np.frombuffer(pk['data'][off + TPAL * 3:off + TREC], np.uint8)
-            assert px.size == TSIZE * TSIZE // 2, (px.size, k)
-            hi, lo = px >> 4, px & 0x0F
-            idx = np.empty(TSIZE * TSIZE, np.uint8)
-            idx[0::2], idx[1::2] = hi, lo
-            if idx.max() >= TPAL or pal.shape != (TPAL, 3):
-                bad += 1
-                continue
+            if pk['bits'] == 8:
+                pal = np.frombuffer(pk['pal'], np.uint8).reshape(256, 3)
+                idx = np.frombuffer(pk['data'][off:off + TREC], np.uint8)
+                assert idx.size == TSIZE * TSIZE, (idx.size, k)
+            else:
+                pal = np.frombuffer(pk['data'][off:off + pk['pbytes']],
+                                    np.uint8).reshape(16, 3)
+                px = np.frombuffer(pk['data'][off + pk['pbytes']:off + TREC], np.uint8)
+                assert px.size == TSIZE * TSIZE // 2, (px.size, k)
+                hi, lo = px >> 4, px & 0x0F
+                idx = np.empty(TSIZE * TSIZE, np.uint8)
+                idx[0::2], idx[1::2] = hi, lo
+                if idx.max() >= 16:
+                    bad += 1
+                    continue
             # decode and compare against the tile this record claims to be: a
             # transposed or shifted tile is well formed and wrong, and only this
             # catches it
@@ -372,8 +432,20 @@ def main():
     if cmd == "pack":  pack(ls);  return 0
     if cmd == "verify": return verify(sys.argv[2])
     if cmd == "tiles":
-        out = sys.argv[2] if len(sys.argv) > 2 else "work/pack/phoenix-18km.tmtl"
-        return pack_tiles(ls, out)
+        # the fabric's streaming path reads eight bits a pixel and one shared
+        # palette, because that is the table its pixel path already has; four
+        # bits a pixel with a palette per tile is the smaller pack and waits for
+        # the pixel path to learn about nibbles.
+        bits = 4
+        args = [a for a in sys.argv[2:] if not a.startswith("--")]
+        for a in sys.argv[2:]:
+            if a.startswith("--bits="):
+                bits = int(a.split("=", 1)[1])
+        if bits not in (4, 8):
+            print(f"--bits must be 4 or 8, not {bits}")
+            return 2
+        out = args[0] if args else f"work/pack/phoenix-18km-{bits}bpp.tmtl"
+        return pack_tiles(ls, out, bits)
     if cmd == "verify-tiles": return verify_tiles(sys.argv[2])
     if cmd == "extract":
         # the raw eight-bit raster of one level, for tools/load_image.py
