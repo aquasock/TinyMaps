@@ -117,7 +117,8 @@ wire [15:0] qnw = (nxt == 2'd0) ? q0 : (nxt == 2'd1) ? q1 : q2;
 
 // ------------------------------------------------------------- line engine ---
 localparam [2:0] S_IDLE = 3'd0, S_PLAN = 3'd1, S_BFETCH = 3'd2,
-                 S_EMIT = 3'd3, S_DONE  = 3'd4;
+                 S_EMIT = 3'd3, S_DONE  = 3'd4,
+                 S_ROWS = 3'd5;        // the row pair, one cycle ahead of S_PLAN
 
 reg [2:0]  st;
 reg [9:0]  cy_d;
@@ -169,11 +170,18 @@ wire [7:0] a1 = p1b_odd ? qcw[7:0]   : qcw[15:8];
 wire [7:0] b0 = p1b_odd ? qn_d[15:8] : qnw[7:0];
 wire [7:0] b1 = p1b_odd ? qnw[7:0]   : qnw[15:8];
 
+// The two rows this line needs, clamped at the bottom of the level.  Registered
+// in S_ROWS, one cycle before they are used: written combinationally from r0
+// they put a 32-bit add, a compare and a mux in front of the `pf_row * level_w`
+// multiply and the fetch base, and that chain was the critical path of the
+// whole design -- 13.22 ns of a 13.47 ns period at placement seed 7, with
+// eighteen carry-chain steps and 2.57 ns of routing in it.
 wire [31:0] row_ok = (r0 + 32'd1 >= level_h) ? level_h - 32'd1 : r0 + 32'd1;
 wire [31:0] pf_row = (r0 + 32'd2 >= level_h) ? level_h - 32'd1 : r0 + 32'd2;
-wire        pf_want = !(bval[0] && brow[0] == pf_row) &&
-                      !(bval[1] && brow[1] == pf_row) &&
-                      !(bval[2] && brow[2] == pf_row);
+reg  [31:0] r_ok, r_pf;
+wire        pf_want = !(bval[0] && brow[0] == r_pf) &&
+                      !(bval[1] && brow[1] == r_pf) &&
+                      !(bval[2] && brow[2] == r_pf);
 wire [31:0] e_now  = (acc_x + 32'd65536) >>> 17;
 wire [31:0] k0_now = (src_x0 + 32'd65536) >>> 17;
 // the window starts one entry early so the first pixel's previous entry is real
@@ -275,30 +283,36 @@ always @(posedge clk or negedge resetn) begin
                 wy    <= bilinear ? acc_y[15:0] : 16'd0;
                 acc_y <= acc_y + step_y;
             end
-            if (cy < OUT_H) st <= S_PLAN;
+            if (cy < OUT_H) st <= S_ROWS;
+        end
+
+        S_ROWS: begin
+            r_ok <= row_ok;
+            r_pf <= pf_row;
+            st   <= S_PLAN;
         end
 
         S_PLAN: begin
-            r1 <= row_ok;
+            r1 <= r_ok;
             k0 <= k0_pf;
             if (win_ok && bval[cur] && brow[cur] == r0 &&
-                bval[nxt] && brow[nxt] == row_ok) begin
+                bval[nxt] && brow[nxt] == r_ok) begin
                 // pair present: prefetch the third row while this line draws
                 if (!f_busy && !f_req && pf_want) begin
-                    f_req  <= 1'b1; f_buf <= fre; f_row <= pf_row; f_cnt <= SPAN;
+                    f_req  <= 1'b1; f_buf <= fre; f_row <= r_pf; f_cnt <= SPAN;
                     f_col  <= k0_pf;
-                    f_base <= level_base + (pf_row * level_w) + {1'b0, k0_pf[22:0], 1'b0};
+                    f_base <= level_base + (r_pf * level_w) + {1'b0, k0_pf[22:0], 1'b0};
                 end
                 emit_x <= 16'd0; acc_x <= src_x0; rd_idx <= {AIDX{1'b0}};
                 st <= S_EMIT;
             end else if (win_ok && bval[nxt] && brow[nxt] == r0 &&
-                         bval[fre] && brow[fre] == row_ok) begin
+                         bval[fre] && brow[fre] == r_ok) begin
                 // one line on: rotate; the prefetched row becomes this line's second
                 cur <= nxt; nxt <= fre; fre <= cur;
                 if (!f_busy && !f_req && pf_want) begin
-                    f_req  <= 1'b1; f_buf <= cur; f_row <= pf_row; f_cnt <= SPAN;
+                    f_req  <= 1'b1; f_buf <= cur; f_row <= r_pf; f_cnt <= SPAN;
                     f_col  <= k0_pf;
-                    f_base <= level_base + (pf_row * level_w) + {1'b0, k0_pf[22:0], 1'b0};
+                    f_base <= level_base + (r_pf * level_w) + {1'b0, k0_pf[22:0], 1'b0};
                 end
                 emit_x <= 16'd0; acc_x <= src_x0; rd_idx <= {AIDX{1'b0}};
                 st <= S_EMIT;
@@ -336,9 +350,9 @@ always @(posedge clk or negedge resetn) begin
             // pan; paying for the fetch here costs one row on the single line
             // that had to block anyway.
             3'd5: if (!f_busy && !f_req) begin
-                f_req  <= 1'b1; f_buf <= 2'd2; f_row <= pf_row; f_cnt <= SPAN;
+                f_req  <= 1'b1; f_buf <= 2'd2; f_row <= r_pf; f_cnt <= SPAN;
                 f_col  <= k0_pf;
-                f_base <= level_base + (pf_row * level_w) + {1'b0, k0_pf[22:0], 1'b0};
+                f_base <= level_base + (r_pf * level_w) + {1'b0, k0_pf[22:0], 1'b0};
                 block_step <= 3'd6;
             end
             3'd6: if (f_ack) begin

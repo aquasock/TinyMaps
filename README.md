@@ -40,12 +40,20 @@ That testbench exists because the fault was invisible to everything else: the
 renderer's own testbench bypasses the adapter, and a model of the channel that
 behaves better than `sdram_ctrl` does not reproduce it.
 
-**Timing has much less margin than this file used to claim.** An eight-seed
-sweep of the current design gives `hclk` between 66.63 and 75.65 MHz against the
-74.25 MHz a 720p line needs, and seven of the eight seeds fail. The 83 to 96 MHz
+**Timing margin was found and fixed.** An eight-seed sweep before the fix gave
+`hclk` between 66.63 and 75.65 MHz against the 74.25 MHz a 720p line needs, with
+seven seeds failing and the best one passing by 1.4 MHz; the 83 to 96 MHz
 figures recorded earlier were particular placements, not the design's margin.
-Seed 7 is the build that ships; any further logic needs the critical path found
-and shortened rather than the seed re-rolled.
+The critical path was `r0` into the row pair at `maps_render.sv:173` -- a 32-bit
+add, a compare and a mux -- feeding the `pf_row * level_w` multiply and the
+fetch base address, all inside `S_PLAN`: two arithmetic operations sharing one
+clock, 13.22 ns of a 13.47 ns period, with eighteen carry-chain steps and
+2.57 ns of routing in it. An `S_ROWS` state now registers the row pair one cycle
+before `S_PLAN` uses it, so each cycle holds one operation instead of both, for
+the price of one clock in 1650 per line. The same eight seeds then give 82.02 to
+92.67 MHz with **every seed passing**, so the worst placement anywhere still has
+7.8 MHz of margin. `check_render` still matches its reference on all five
+viewports, which is what says the extra cycle changed no pixel.
 
 The first hardware capture also showed the levels
 lifted and clipped at the top -- the sink reading full-range RGB as limited

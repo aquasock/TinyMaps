@@ -167,7 +167,20 @@
   adapter now holds a request until the channel is idle and leaves one clear
   cycle between lines.  Measured before and after on the same testbench: 60
   vstarts during a live line, then none.
-- **Timing, measured properly this cycle.**  An eight-seed sweep of the design
+- **Timing margin fixed this cycle.** The eight-seed spread of 66.63 to 75.65 MHz
+  with seven failures was a real defect, and the critical path said why:
+  `maps_render.sv`'s `S_PLAN` computed the row pair from `r0` (32-bit add,
+  compare, mux) and then the `pf_row * level_w` multiply and the fetch base in
+  the same clock -- 13.22 ns of 13.47. A new `S_ROWS` state registers the row
+  pair one cycle earlier, splitting the two operations across two clocks and
+  costing one clock in 1650 per line. The same eight seeds now give 82.02 to
+  92.67 MHz with all eight passing, so the worst placement anywhere has 7.8 MHz
+  of margin and the design is no longer hostage to a seed. `check_render` still
+  matches on all five viewports, so no pixel moved. Built as
+  `tinymaps.d9e7bf60b5fe.bin` at seed 2 (92.67 MHz) but **not deployed**: the
+  board was off USB entirely at the end of the cycle, so this and the pointer
+  work should ship in one deploy.
+- **Timing, measured properly last cycle.**  An eight-seed sweep of the design
   that ships gives `hclk` between 66.63 and 75.65 MHz against 74.25, and seven
   of the eight fail; seed 7 passes and is the bitstream deployed.  The 83-96 MHz
   figures recorded earlier in this file were single placements, not margin.

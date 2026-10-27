@@ -749,3 +749,35 @@ The timing margin is now the only item carrying real risk: the eight-seed sweep 
 - User Test: PASS
 
 ---
+
+## 22 COMMIT Unreleased 2026-10-26T18:52:40-07:00
+
+#### Coming From:
+
+Unreleased 1d82f2b
+
+#### Purpose:
+
+Recover the timing margin, after an eight-seed sweep showed seven placements failing at 74.25 MHz and the design shipping on the one lucky seed.
+
+#### Outcome:
+
+The critical path was read out of the placement report rather than guessed: 13.22 ns of a 13.47 ns period, thirty segments of it tracing to `maps_render.sv:173`, which is the row-pair clamp. `S_PLAN` computed `r0` into that 32-bit add, compare and mux, then fed the result into the `pf_row * level_w` multiply and the fetch base address, all inside one clock, with eighteen carry-chain steps and 2.57 ns of routing in the chain. A new `S_ROWS` state now registers the row pair one cycle before `S_PLAN` reads it, so each clock holds one arithmetic operation instead of two; it costs one clock in the 1650 a raster line has, and every use in the plan and the blocking fetch was moved to the registered pair. `check_render` still matches its reference on all five viewports and `tb_maps_line_store` still reports identical frames with no vstart during a live line, so the extra cycle changed nothing observable. The eight-seed sweep of the same eight seeds then returned 83.44, 92.67, 82.02, 86.37, 87.69, 89.89, 88.24 and 90.01 MHz with every seed passing, against 66.63 to 75.65 with one passing before, so the worst placement now has 7.8 MHz of margin and the design no longer depends on which seed is chosen. The build of record is `tinymaps.d9e7bf60b5fe.bin` at seed 2, the highest at 92.67 MHz. Deployment did not run and the user could not test: the Tang was off USB entirely at the end of the cycle, with no `/dev/ttyACM0` and no FT2232 present, so nothing was written to the card and no bitstream was programmed. The change will ship with the next cycle's deploy rather than on its own. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Ship this bitstream with the pointer and zoom-to-cursor work so one deploy covers both, and confirm on the board that the map still pans and draws as it did, since the timing fix moved one clock inside the renderer's line engine. That work, approved this cycle: forward the mouse button state that `maps_link_rx` already latches but drops, add a pointer register with the green frame and red crosshair indicators, make the left button a grab and release on the land, and make the wheel zoom about the cursor rather than the centre of the screen. Free rotation stays out of scope until a bandwidth model says it fits, because the row-based sampler cannot serve a diagonal output line.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_render.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---
