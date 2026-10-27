@@ -356,7 +356,18 @@
   changes the scale, and the base used to be latched before that could happen, so
   every fallback pixel came from thirty-three entries away.  Both are
   simulation-only: `sim/tb_maps_stream.sv` models the level's bounds now and
-  counts any request outside the grid.  See `docs/streaming-scope.md`.
+  counts any request outside the grid.  Then the board reported scattered wrong
+  pixels and a smear on the first pan, and it was the fill: a slot's tag stayed
+  valid for the whole 0.32 s a 64 KiB tile takes to arrive, so lookups for the
+  previous tenant still hit and the renderer read a slot half old and half new.
+  `fill_inval` now clears the slot when a fill begins, so a slot being written is
+  a miss and the line falls back instead of drawing a tear.  That fix is built,
+  testbenches and sweep clean, **not deployed**.  The same run also showed the
+  pool is too small for the finest level: a z15 screen plus its fallback wants
+  fifty-two of the sixty-four slots, and it livelocked on two tiles colliding in
+  one slot.  Half-size tiles are the answer -- 4bpp gives 128 slots in the same
+  4 MiB -- so that is the next thing that matters.  See
+  `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The
