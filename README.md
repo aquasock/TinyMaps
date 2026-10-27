@@ -114,6 +114,7 @@ measurements, the fix and the levers that were ruled out.
 ## Building
 
     tools/build_maps_core_open.sh
+    tools/build_seeds.sh --range 1 8 -j 4     # or: tools/build_seeds.sh 1 4 7
 
 Needs oss-cad-suite, the nextpnr-himbaechel fork built against a regenerated
 GW5AST-138C database, and the apicula fork. The defaults are this machine's:
@@ -121,8 +122,12 @@ GW5AST-138C database, and the apicula fork. The defaults are this machine's:
 - `NEXTPNR_BUILD=/home/vash/tools/nextpnr-mathieufro`
 - `APICULA_FORK=/run/media/vash/GIT/apicula-mathieufro`
 
-The flow refuses to pack a netlist with setup or hold violations. Artefacts
-land in `build/tinymaps/open-s<seed>/`, named after their own sha256 prefix.
+The flow refuses to pack a netlist with setup or hold violations, and one seed
+says nothing about the design: `tools/build_seeds.sh` builds a set of them in
+parallel, each in its own staged tree, and leaves one line per seed in
+`build/seeds.txt` so the spread survives even if the run does not. Artefacts land
+in `build/tinymaps/open-s<seed>/`, or `build/seed-<n>/open/` from the sweep, named
+after their own sha256 prefix.
 
 `fpga/tinymaps/tinymaps_top.sv` carries the renderer `maps_render.sv`, its row
 adapter `maps_video_rd.sv`, the SDRAM engine `sdram_ctrl.sv` (vended from

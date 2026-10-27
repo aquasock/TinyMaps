@@ -919,3 +919,34 @@ The eight-seed sweep of this build still owes a number, and the background launc
 - User Test: PASS
 
 ---
+
+## 27 COMMIT Unreleased 2026-10-26T22:39:58-07:00
+
+#### Coming From:
+
+Unreleased f0d3775
+
+#### Purpose:
+
+Give the design a build sweep that cannot be lost, and use it to settle the eight-seed spread the previous entry owed.
+
+#### Outcome:
+
+Every cycle that needed a spread so far had it driven from ad-hoc shell scripts written into `/tmp`, and those died often enough that one sweep silently never ran while looking alive -- `ps` was matching the searching command's own arguments. `tools/build_seeds.sh` replaces them: it takes seeds or a `--range`, builds them `-j` at a time in parallel, gives each its own `MAPS_BUILD_DIR` because the flow re-stages and deletes its tree on every invocation, records the seed list and the start time in `build/seeds.txt` before the first build begins, and appends one line per seed with the verdict, the frequency and the artefact name whether or not the run survives. Its exit status is 0 if any seed passed, 1 if none did, and 2 for bad arguments, because a seed that misses timing is the measurement rather than an error. It was proved on two seeds whose answers were already known -- 80.85 and 83.37 at the committed 2 Mbaud default, against 82.41 and 78.79 before the pan fix -- and then run over seeds 1 to 8, which is the spread entry 26 could not quote: **all eight pass**, from 76.44 at seed 5 to 84.05 at seed 3, with seed 8 at 82.09, seed 4 at 83.25, seed 7 at 83.37, seed 1 at 80.85, seed 6 at 80.50 and seed 2 at 78.91. The design therefore closes on every placement tried rather than on a lucky one, and the worst of the eight still has 2.2 MHz of margin, which is the first time that has been true since the integration first closed. No deployment ran in this cycle: the user asked for the tooling and the sweep without a board test, so nothing was programmed and the board stays on `tinymaps.ac916e42ed71` from entry 26. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The streaming architecture is unblocked and is the next real piece: a tile pool with a page table in fabric, a fetch engine that follows a tile map across a 256-pixel boundary rather than one linear base address, prefetch and eviction driven by the viewport, and a miss falling back to the next coarser level instead of drawing garbage. The budget is measured -- 431 kB/s at 5 Mbaud, so a 64 KB tile is 0.15 s and a z15 screenful about 2 s, halved by 4-bit tiles -- and the margin is now known: 76.44 to 84.05 across eight seeds, so new logic has about two megahertz to spend before it needs its own hoisting. The two small defects remain, the readback's top byte above 16 MB and the zoom ceiling on the finest level, as does the board's shorted power input.
+
+#### Files Modified:
+
+- README.md
+- tools/build_seeds.sh
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---
