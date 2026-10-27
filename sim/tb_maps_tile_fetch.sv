@@ -34,6 +34,8 @@ reg [11:0] row = 12'd0;
 reg [13:0] entry0 = 14'd0;
 reg [15:0] span = SPAN[15:0];
 wire       busy, done, miss;
+wire [1:0] miss_level;
+wire [14:0] miss_tx, miss_ty;
 wire       we;
 wire [$clog2(SPAN)-1:0] widx;
 wire [15:0] wdata;
@@ -53,6 +55,7 @@ maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TSIZE), .TENT(TENT), .TW(TW)) dut (
     .clk(clk), .resetn(resetn),
     .start(start), .level(level), .row(row), .entry0(entry0), .span(span),
     .busy(busy), .done(done), .miss(miss),
+    .miss_level(miss_level), .miss_tx(miss_tx), .miss_ty(miss_ty),
     .we(we), .widx(widx), .wdata(wdata),
     .lk_valid(lk_valid), .lk_tx(lk_tx), .lk_ty(lk_ty),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
@@ -66,6 +69,12 @@ maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TSIZE), .TENT(TENT), .TW(TW)) dut (
 // early pass, which is how the first version of the sequencer passed this
 // testbench while missing every tile in the renderer.
 reg table_miss = 1'b0;
+// or just one tile: a miss that reports its coordinates can only be checked if
+// the test can say which tile missed, rather than every lookup failing
+reg        miss_sel = 1'b0;
+reg [14:0] miss_sel_tx = 15'd0, miss_sel_ty = 15'd0;
+wire       this_misses = table_miss ||
+                         (miss_sel && lk_tx == miss_sel_tx && lk_ty == miss_sel_ty);
 wire [5:0] lk_slot = (lk_tx[5:0] + lk_ty[5:0] * 6'd3) % SLOTS[5:0];
 reg [1:0]  lk_pipe = 2'd0;                  // {answer, question}
 reg [5:0]  lk_slot_q = 6'd0;
@@ -76,7 +85,7 @@ always @(posedge clk) begin
     end else begin
         lk_pipe   <= {lk_pipe[0], lk_valid};
         lk_slot_q <= lk_slot;
-        miss_q    <= table_miss;
+        miss_q    <= this_misses;
     end
 end
 assign lk_hit  = lk_pipe[1] && !miss_q;
@@ -120,6 +129,13 @@ logic [15:0] got [0:SPAN-1];
 integer ngot = 0, errors = 0;
 integer k;
 
+// a miss is one cycle; the waiting loop in fetch_window samples it there rather
+// than a latch written from another process, which is a race the simulator is
+// free to resolve the other way
+reg        saw_miss = 1'b0;
+reg [1:0]  cap_level = 2'd0;
+reg [14:0] cap_tx = 15'd0, cap_ty = 15'd0;
+
 always @(posedge clk)
     if (we && ngot < SPAN) begin got[ngot] = wdata; ngot = ngot + 1; end
 
@@ -136,13 +152,24 @@ task automatic fetch_window(input [11:0] r0, input [13:0] e0, input [15:0] n);
     integer guard;
 begin
     ngot = 0;
+    saw_miss = 1'b0;
     @(posedge clk);
     row = r0; entry0 = e0; span = n;
     start = 1'b1;
     @(posedge clk);
     start = 1'b0;
     guard = 0;
-    while (!done && !miss && guard < 20000) begin @(posedge clk); guard = guard + 1; end
+    while (guard < 20000) begin
+        @(posedge clk);
+        guard = guard + 1;
+        if (miss) begin
+            saw_miss  = 1'b1;
+            cap_level = miss_level;
+            cap_tx    = miss_tx;
+            cap_ty    = miss_ty;
+        end
+        if (done || miss) guard = 20000;
+    end
     repeat (4) @(posedge clk);
 end
 endtask
@@ -192,6 +219,19 @@ initial begin
     fetch_window(12'd200, 14'd10, SPAN[15:0]);
     want(ngot < SPAN, "a miss stops the window short");
     table_miss = 1'b0;
+
+    // and it says which tile was missing.  Entry 600 is inside tile 4 (1200
+    // pixels over, 512 pixels into the tile), and the chunk runs to the tile
+    // boundary at entry 640, so tile 5 is the one this window needs next.
+    level = 2'd2;
+    miss_sel = 1'b1; miss_sel_tx = 15'd5; miss_sel_ty = 15'd1;
+    fetch_window(12'd300, 14'd600, SPAN[15:0]);
+    want(saw_miss === 1'b1, "the fetch missed");
+    want(cap_level === 2'd2, "the miss names the level");
+    want(cap_tx === 15'd5, "the miss names the tile's x");
+    want(cap_ty === 15'd1, "the miss names the tile's y");
+    miss_sel = 1'b0;
+    level = 2'd0;
 
     if (errors) $display("RESULT: FAIL (%0d errors)", errors);
     else        $display("RESULT: PASS (windows walk their chunks and land in order)");

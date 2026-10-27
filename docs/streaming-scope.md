@@ -218,9 +218,25 @@ testbench than from a rebuilt renderer.
   also answered a question the sequencer's own testbench could not: the renderer
   starts fetching the moment reset is released, so a pool that is not yet
   resident is a miss in the first line, and a missed row is not retried.
-- **Next: the request protocol and the TinyTang tile server**, then prefetch,
-  eviction and the coarse fallback on a miss (which is what makes that
-  no-retry behaviour harmless), then 4bpp in the pixel path.
+- **Done: the request out** (`maps_tile_req.sv`) -- the sequencer's miss, with
+  the tile's coordinates registered alongside it, goes into a short queue and
+  comes out as a frame on the link's transmitter.  Requests for the same tile in
+  the queue fold into one, because a line misses in chunks and would otherwise
+  ask eight times; the same tile asked for again after its request has gone is a
+  second request, which is the only retry this design has.  The transmitter is
+  shared with the loader's answers, so a frame is offered only while the arbiter
+  grants it, keeps the grant for the whole frame, and re-offers a byte until the
+  arbiter takes it -- a frame with a byte missing is worse than a frame that is
+  late.  `sim/tb_maps_tile_req.sv` models the transmitter and the arbiter and
+  decodes every byte back into a frame: dedupe, ordering, a queue that fills and
+  drops with a sticky flag, a loader that holds the line, and a loader that asks
+  mid-frame and does not get it.
+- **Next: the reply**, which is the other half of item 4 and is not written.  A
+  frame cannot exceed 2047 bytes, so a 32 KiB tile has to arrive in blocks; the
+  slot address is the page table's business and must not be something the host
+  has to know, and the table is told a tile landed only when its last block has.
+  Then prefetch, eviction and the coarse fallback on a miss (which is what makes
+  that no-retry behaviour harmless), then 4bpp in the pixel path.
 
 **A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
 At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the
@@ -228,6 +244,25 @@ low and high byte by parity -- would need nibble extraction instead. So the firs
 streaming path uses **8bpp tiles**, where a tile row is 256 bytes, exactly one
 SDRAM line and 128 entries, which is the geometry the video channel already has;
 4bpp then changes the packing and the pixel path, not the fetch.
+
+## The request frame
+
+The core asks for a tile with the same frame shape the host sends it, so one
+parser covers both directions: `0xAA`, a big-endian length, a command, then the
+payload.  The command is `0x1C` and the length counts the command with the
+payload, so it is six:
+
+    AA 00 06 1C L TXH TXL TYH TYL
+
+`L` is the level, 0 to 3 as the level table orders them, finest first.  `TX` and
+`TY` are the tile's coordinates in the level's own tile grid as fifteen bits in a
+sixteen-bit big-endian pair.  Nothing is answered with an acknowledgement: the
+reply is the tile's bytes, and a tile that never arrives is asked for again the
+next time a line needs it.
+
+A frame cannot be longer than 2047 bytes -- the receiver's length field is eleven
+bits plus a guard -- so a 32 KiB tile cannot be one frame.  That constrains the
+reply, not the request.
 
 ## Implementation order
 

@@ -1115,3 +1115,38 @@ The half that talks to the card: a request protocol over the BL616 link for "giv
 - User Test: NOT RUN
 
 ---
+
+## 33 COMMIT Unreleased 2026-10-27T00:18:09-07:00
+
+#### Coming From:
+
+Unreleased d3eb558
+
+#### Purpose:
+
+Give the fabric a way to ask the host for a tile, which is the first half of the request-and-reply pair the streaming design needs.
+
+#### Outcome:
+
+`fpga/tinymaps/maps_tile_fetch.sv` now reports the tile a miss was about -- `miss_level`, `miss_tx` and `miss_ty`, registered in the same cycle as `miss` -- because a caller that has to ask for the tile cannot ask for "the one that missed": by the time it acts the sequence has moved on and the lookup port belongs to somebody else. The new `fpga/tinymaps/maps_tile_req.sv` queues those misses and sends each as a frame on the link: `AA 00 06 1C L TXH TXL TYH TYL`, the same `0xAA`/length/command shape the host sends, so one parser serves both directions, with a five-byte payload of level and the tile's coordinates as fifteen bits in a sixteen-bit big-endian pair. Two requests for the same tile already in the queue fold into one, since a line misses in chunks and would otherwise ask eight times; the same tile asked for again after its request has gone is a second request, deliberately, because that is a tile that did not arrive in time and asking again is the only retry this design has. The transmitter is shared with the loader's answers, so a frame is offered only while the arbiter grants it and keeps the grant until the last byte is taken, and a byte is re-offered until the arbiter acknowledges it -- lost arbitration is a retry, not a hole in the middle of a frame. The queue holds eight, drops on overflow and says so with a sticky flag, and reports its depth so the status command can show a stalled queue later. `sim/tb_maps_tile_req.sv` models the transmitter and the arbiter -- busy for a few cycles after each byte, a higher-priority loader that can hold the line, and a mid-frame request from it that must not be granted -- and decodes every captured byte back into a frame: one miss is one frame byte for byte, a duplicate is folded, a repeat after the frame has gone is a new frame, nothing starts while the loader holds the line and the frame is intact once it lets go, a full queue drops and reports, and everything that was queued comes out in order. Reading the module back before it left the bench found one real defect: a push landing on the same edge as a frame's last byte assigned the depth twice in one cycle, the retire won, and the pushed request sat in the queue uncounted -- a request that is in the queue and not counted is a request that never goes out. The depth is now computed from both events at once, and the testbench sweeps a second push across every offset inside a frame's lifetime, so one of them necessarily lands on the retire edge; with the defect put back deliberately the sweep fails at offset 48, which is that edge. `sim/tb_maps_tile_fetch.sv` gained a selective miss so the reported coordinates can be checked rather than only the fact of a miss -- entry 600 of row 300 runs to the tile boundary at entry 640, so the fetch must name tile (5, 1) of level 2, and it does. The full suite is seventeen of seventeen, including `check_render` and `check_tmds`. Nothing was built or deployed: `maps_tile_req` is not instantiated in `tinymaps_top`, which still has no sequencer to miss, so the netlist and the board are untouched. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The reply, which is the other half of the cycle: a command that carries a tile's bytes, with the core writing them to the slot the page table chose and telling the table the tile has landed only when its last block has arrived, since the receiver's frame limit is 2047 bytes and a 32 KiB tile cannot be one frame. The slot address must stay the core's business -- the host should send coordinates, not a destination. After that, prefetch and eviction in the page table and the coarse-level fallback, which is what the renderer's not-retrying a missed row needs to be harmless.
+
+#### Files Modified:
+
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_tile_fetch.sv
+- fpga/tinymaps/maps_tile_req.sv
+- sim/tb_maps_tile_fetch.sv
+- sim/tb_maps_tile_req.sv
+
+#### Status:
+
+- Build: N/A
+- Deployment: N/A
+- User Test: N/A
+
+---

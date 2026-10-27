@@ -16,6 +16,11 @@
 // that line from the coarser level.  Deliberately not handled here -- this module
 // owns the sequence, not the policy.
 //
+// The miss carries the tile's own coordinates, registered with it, because a
+// caller that has to *ask* for the tile cannot ask for "the one that missed": by
+// the time it acts the sequence has moved on and the lookup port belongs to
+// somebody else.
+//
 // The page table answers a cycle after it is asked, so the sequence has a lookup
 // state between chunks.  That is the whole cost of tiling on the fetch side: one
 // cycle per tile boundary plus the SDRAM page misses the chunks themselves cause.
@@ -41,6 +46,9 @@ module maps_tile_fetch #(
     output reg         busy,
     output reg         done,          // one cycle when the window is complete
     output reg         miss,          // one cycle when a tile was not resident
+    output reg  [1:0]  miss_level,    // and which tile it was
+    output reg  [14:0] miss_tx,
+    output reg  [14:0] miss_ty,
 
     // entries land here, in window order
     output reg         we,
@@ -99,6 +107,7 @@ always @(posedge clk) begin
         f_left <= 16'd0; f_take <= 16'd0;
     end else begin
         we <= 1'b0; done <= 1'b0; miss <= 1'b0;
+        miss_level <= 2'd0; miss_tx <= 15'd0; miss_ty <= 15'd0;
         lk_valid <= 1'b0; rd_start <= 1'b0;
 
         case (st)
@@ -134,8 +143,13 @@ always @(posedge clk) begin
             rd_start <= 1'b1;
             st       <= F_READ;
         end else begin
-            // not resident: stop and say so, leaving the window part filled
-            miss <= 1'b1;
+            // not resident: stop and say so, leaving the window part filled.
+            // The coordinates are the ones the table was just asked about, and
+            // they are registered here because the caller acts cycles later.
+            miss       <= 1'b1;
+            miss_level <= f_level;
+            miss_tx    <= lk_tx;
+            miss_ty    <= lk_ty;
             busy <= 1'b0;
             st   <= F_IDLE;
         end

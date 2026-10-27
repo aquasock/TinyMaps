@@ -302,7 +302,11 @@
   and the board behave exactly as before.  What is missing is the half that talks
   to the card: a request protocol to the BL616, the tile server on the TinyTang
   side, prefetch and eviction, and the coarse-level fallback that a miss needs
-  because a missed row is not retried.  See `docs/streaming-scope.md`.
+  because a missed row is not retried.  The request has a shape now:
+  `maps_tile_req.sv` turns a miss into a `0xAA 00 06 1C L TXH TXL TYH TYL`
+  frame on the link, deduped within its queue and holding the transmitter for
+  the whole frame so the loader's answers cannot interleave with it.  Nothing
+  answers those frames yet.  See `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The
