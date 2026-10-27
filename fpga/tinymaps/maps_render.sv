@@ -45,10 +45,6 @@ module maps_render #(
     // a line spans at most 2*OUT_W source pixels, i.e. OUT_W entries, and four
     // more cover the straddle at the edges.
     parameter integer SPAN  = OUT_W + 4,
-    // fetch through the tile pool instead of a linear level address.  Off by
-    // default so the linear path stays what everything else was verified against;
-    // a build that streams turns it on and supplies the sequencer's ports.
-    parameter bit TILED = 1'b0,
     // How long the blocking fetch waits after a tile it needs is missing before
     // it asks again, in clocks.  A request is not acknowledged, so this is the
     // only thing that re-asks when the answer has not come; too short and the
@@ -93,11 +89,14 @@ module maps_render #(
     output reg  [7:0]  out_idx,      // the palette index, for a cross-domain line store
     output reg         out_valid,
 
-    // Tile mode.  When TILED the fetch engine stops computing a linear byte
-    // address and instead asks maps_tile_fetch for the window; the sequencer
-    // reads it in per-tile chunks and hands back one entry at a time.  The linear
-    // path stays exactly as it was for TILED=0, so the module can be built both
-    // ways and the two compared.
+    // Tile mode.  When `stream` is high the fetch engine stops computing a
+    // linear byte address and instead asks maps_tile_fetch for the window; the
+    // sequencer reads it in per-tile chunks and hands back one entry at a time.
+    // The linear path is still here and still what runs when `stream` is low,
+    // because until a host can answer a request a tile pool is an empty pool --
+    // so which path the picture comes from is the host's choice, not the
+    // bitstream's.  Both paths are built; one of them runs.
+    input  wire        stream,
     input  wire [1:0]  tile_level,     // the finest level the view is over
     // the level the sequencer is being asked about: the view's own, or the one
     // below it when the line is being drawn from the fallback
@@ -117,11 +116,11 @@ module maps_render #(
 localparam integer AIDX = $clog2(SPAN);
 
 // one source of entries for the row buffers, whichever mode is on
-wire             src_we   = TILED ? seq_we    : rd_valid;
-wire [AIDX-1:0]  src_idx  = TILED ? seq_widx  : f_j;
-wire [15:0]      src_data = TILED ? seq_wdata : rd_data;
-wire             src_done = TILED ? seq_done  : (f_j == f_cnt[AIDX-1:0] - 1'b1);
-wire             src_miss = TILED ? seq_miss  : 1'b0;
+wire             src_we   = stream ? seq_we    : rd_valid;
+wire [AIDX-1:0]  src_idx  = stream ? seq_widx  : f_j;
+wire [15:0]      src_data = stream ? seq_wdata : rd_data;
+wire             src_done = stream ? seq_done  : (f_j == f_cnt[AIDX-1:0] - 1'b1);
+wire             src_miss = stream ? seq_miss  : 1'b0;
 
 // ------------------------------------------------------------------ palette --
 reg [23:0] pal [0:255];
@@ -264,7 +263,10 @@ wire [15:0] cnt_e  = cfall ? ((SPAN[15:0] >> 1) + 16'd2) : SPAN[15:0];
 wire [31:0] x_e    = bcrs[cur] ? (acc_x >> 1) : acc_x;
 wire [31:0] e_new  = (x_e + 32'd65536) >>> 17;
 
-assign seq_level = cfall ? (tile_level - 2'd1) : tile_level;
+// The level table is finest first, so the level below the view is one higher;
+// level 3 is the coarsest there is and falls back to nothing.
+wire       can_fall = (tile_level != 2'd3);
+assign seq_level = cfall ? (tile_level + 2'd1) : tile_level;
 wire [31:0] k0_now = (src_x0 + 32'd65536) >>> 17;
 // the window starts one entry early so the first pixel's previous entry is real
 wire [31:0] k0_pf  = (k0_now == 32'd0) ? 32'd0 : k0_now - 32'd1;
@@ -321,7 +323,7 @@ always @(posedge clk or negedge resetn) begin
                 brow[f_buf] <= f_row;
                 bcrs[f_buf] <= cfall;
                 col_tag     <= f_col;
-            end else if (src_miss && !cfall && tile_level != 2'd0) begin
+            end else if (src_miss && !cfall && can_fall) begin
                 // the view's own level could not answer: draw this line from the
                 // level below, which is the whole point of the fallback, and let
                 // the retry timer bring the fine attempt back
@@ -339,14 +341,14 @@ always @(posedge clk or negedge resetn) begin
                 f_missed    <= 1'b1;
                 retry_cnt   <= TILE_RETRY[20:0];
                 tile_misses <= tile_misses + 16'd1;
-            end else if (!TILED && rd_valid) begin
+            end else if (!stream && rd_valid) begin
                 f_j <= f_j + 1'b1;
             end
         end else if (f_req) begin
             f_req <= 1'b0;
             f_busy <= 1'b1;
             f_j    <= {AIDX{1'b0}};
-            if (TILED) begin
+            if (stream) begin
                 seq_entry <= k0_e[13:0];
                 seq_start <= 1'b1;
             end else begin

@@ -96,6 +96,13 @@
 // adds them to the address the page table derives, so the cache's replacement
 // policy stays in the cache.
 //
+// Command 0x1E is one byte that says which source the picture is drawn from:
+// zero is the pack, which is what runs when nothing is answering tile requests,
+// and one is the tile pool.  It is answered ACK.  It exists because the pool
+// cannot answer itself: until the host serves tiles, streaming mode is an empty
+// pool and an empty picture, so the mode belongs to the host and not to the
+// bitstream.
+//
 // The write port is ahb_sdram's A25 side: req, address, lanes and data held
 // steady until ack pulses.  Bytes are assembled little-endian into a 64-bit
 // word and issued with all eight lanes; a short tail goes out with only the
@@ -163,6 +170,9 @@ module maps_link_rx #(
     output wire [24:0] lv_base0, lv_base1, lv_base2, lv_base3,
     output wire [15:0] lv_w0, lv_w1, lv_w2, lv_w3,
     output wire [15:0] lv_h0, lv_h1, lv_h2, lv_h3,
+
+    // which source the picture is drawn from: 0 pack, 1 tile pool
+    output reg         stream_on,
 
     // one navigation event: output pixels to pan, and a zoom step
     output reg         nav_ev,
@@ -260,6 +270,8 @@ reg         t_last;                 // this block ends the tile
 reg         t_commit_pending;
 reg         t_ovf;                  // a word was lost to a busy write port
 reg  [31:0] tiles;
+reg         m_got;                  // a 0x1E byte has arrived
+reg  [7:0]  m_byte;
 
 // the block's count as it is being received, the last header byte included
 wire [15:0] t_cnt_n = {tile_byte, t_count[7:0]};
@@ -416,6 +428,7 @@ always @(posedge clk or negedge resetn) begin
         t_commit_pending <= 1'b0; t_ovf <= 1'b0; tiles <= 32'd0;
         fill_level <= 2'd0; fill_tx <= 15'd0; fill_ty <= 15'd0;
         fill_commit <= 1'b0;
+        stream_on <= 1'b0; m_got <= 1'b0; m_byte <= 8'd0;
         vs <= V_IDLE; vp_valid <= 1'b0; vp_byte <= 8'd0; vb <= 5'd0;
         vw <= 32'd0; v_base <= 32'd0; v_wh <= 32'd0; v_step <= 32'd0;
         v_x0 <= 32'd0; v_y0 <= 32'd0; v_crc <= 32'hFFFFFFFF; v_rx <= 32'd0;
@@ -531,6 +544,9 @@ always @(posedge clk or negedge resetn) begin
                             end else if (fcmd == 8'h1D && TILES) begin
                                 tile_valid <= 1'b1;
                                 tile_byte  <= rx_data;
+                            end else if (fcmd == 8'h1E) begin
+                                m_byte <= rx_data;
+                                m_got  <= 1'b1;
                             end
                             if (fleft == 12'd1) fs <= F_IDLE;
                             else fleft <= fleft - 12'd1;
@@ -615,6 +631,15 @@ always @(posedge clk or negedge resetn) begin
                 end
                 default: ps <= P_IDLE;
             endcase
+        end
+
+        // ------------------------------------------------------- picture source --
+        if (m_got) begin
+            m_got     <= 1'b0;
+            stream_on <= m_byte[0];
+            tx_b0 <= ACK; tx_b1 <= 8'd0; tx_two <= 1'b0;
+            tx_step <= 2'd0; tx_i <= 1'b0;
+            after_tx <= S_MAGIC; st <= S_TX;
         end
 
         // ---------------------------------------------------------- tiles --
@@ -1100,8 +1125,11 @@ always @(posedge clk or negedge resetn) begin
             busy <= 1'b0; st <= S_TX;
         end
 
+        // Wait for the line before offering the byte: `tx_busy` includes the
+        // tile request queue's hold, since the two share this transmitter, and a
+        // reply that starts in the middle of a request frame corrupts both.
         S_TX: case (tx_step)
-            2'd0: begin
+            2'd0: if (!tx_busy) begin
                 tx_data <= tx_i ? tx_b1 : tx_b0;
                 tx_start <= 1'b1;
                 tx_step <= 2'd1;

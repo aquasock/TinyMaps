@@ -299,10 +299,21 @@ testbench than from a rebuilt renderer.
   next line tries the view's own level again, and the picture sharpens when that
   fetch lands -- which is "sharp where you stay, soft while you move" falling out
   of the same machinery.
-- **Next: `TILED` on in the top.** The sequencer, the page table and the request
-  queue get instantiated beside the renderer, the retry and the fallback stop
-  being unreachable code, and the board streams.  Then prefetch and eviction,
-  which need the pool to report when it is full, and 4bpp in the pixel path.
+- **Done: the streaming path is in the top, behind a switch.**  The sequencer,
+  the page table and the request queue are instantiated beside the renderer, the
+  video channel is muxed between the renderer's own linear fetch and the
+  sequencer's chunk read, and the two share the link's transmitter with the
+  loader's answers having priority.  The switch is command `0x1E`, one byte, and
+  it defaults to the pack -- because the pool cannot answer itself: until the host
+  serves tiles, streaming mode is an empty pool and a blank picture, so the mode
+  belongs to the host and not to the bitstream.  Two things had to change for the
+  transmitter to be shared safely.  A frame keeps the line from the first byte the
+  arbiter actually takes, not from the offer, so a lost offer does not stall the
+  answer that won; and the loader now waits for the line before it offers a reply
+  byte, which is what stops an ACK starting inside a request frame.
+- **Next: the tile server on the TinyTang side**, which is what command `0x1E`
+  is waiting for, then prefetch and eviction -- which need the pool to report when
+  it is full -- and 4bpp in the pixel path.
 
 **A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
 At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the

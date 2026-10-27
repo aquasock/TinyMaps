@@ -76,6 +76,9 @@ read_slang --std 1800-2017 -U SYNTHESIS \
     src/tinymaps/maps_link_rx.sv \
     src/tinymaps/maps_render.sv \
     src/tinymaps/maps_tiles.sv \
+    src/tinymaps/maps_tile_addr.sv \
+    src/tinymaps/maps_tile_fetch.sv \
+    src/tinymaps/maps_tile_req.sv \
     src/tinymaps/sdram_ctrl.sv \
     src/tinymaps/maps_video_rd.sv \
     src/tinymaps/maps_nav.sv \

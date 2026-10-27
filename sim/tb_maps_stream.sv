@@ -81,7 +81,7 @@ reg pal_we = 1'b0;
 reg [7:0] pal_idx = 8'd0;
 reg [23:0] pal_data = 24'd0;
 
-maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN), .TILED(1'b1),
+maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN),
                  .TILE_RETRY(TILE_RETRY_TB)) u_render (
     .clk(clk), .resetn(resetn),
     .src_x0(src_x0), .src_y0(src_y0), .step_x(step_x), .step_y(step_y),
@@ -93,7 +93,7 @@ maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN), .TILED(1'b1),
     .cx(cx), .cy(cy),
     .fetch_count(), .dbg_state(dbg_state),
     .out_x(out_x), .out_rgb(out_rgb), .out_idx(out_idx), .out_valid(out_valid),
-    .tile_level(LVL),
+    .stream(1'b1), .tile_level(LVL),
     .seq_level(seq_level),
     .seq_start(seq_start), .seq_entry(seq_entry),
     .seq_row(seq_row), .seq_span(seq_span),
@@ -276,7 +276,7 @@ begin
                               ((srow[7:0]) * 256) + scol[7:0]);
             ccol = scol >> 1;
             crow = srow >> 1;
-            exp_c = tile_byte(LVL - 2'd1, ccol[14:8], crow[14:8],
+            exp_c = tile_byte(LVL + 2'd1, ccol[14:8], crow[14:8],
                               ((crow[7:0]) * 256) + ccol[7:0]);
             if (out_idx !== exp_f)   bad_fine   = bad_fine + 1;
             if (out_idx !== exp_c)   bad_coarse = bad_coarse + 1;
@@ -310,13 +310,19 @@ endtask
 // whole.  One fetch stops at the first tile it does not have, so a line that
 // spans three new tiles takes three answers -- which is what the board will do,
 // and the point is that it converges on the level's own pixels.
+// Converge on a clean line: whole, exact, and with nothing left outstanding.  A
+// line only settles once the tiles it asked for while drawing the previous one
+// have been answered, so "no requests left" is part of the condition -- without
+// it the loop stops on a good line and the next one asks again.
 integer att, settled;
-task automatic settle_line(input integer row);
+task automatic settle_line(input integer row, input bit want_fine);
 begin
     settled = 0;
-    for (att = 0; att < 8 && !settled; att = att + 1) begin
-        run_line(row, 700);
-        if (seen == OUT_W && (bad_fine == 0 || bad_coarse == 0)) settled = 1;
+    for (att = 0; att < 12 && !settled; att = att + 1) begin
+        run_line(row, 900);
+        if (seen == OUT_W && req_n == 0 &&
+            (want_fine ? (bad_fine == 0) : (bad_fine == 0 || bad_coarse == 0)))
+            settled = 1;
         else serve_all;
     end
     serve_all;
@@ -356,7 +362,7 @@ initial begin
     // 2. the host answers, and the picture converges on the view's own level
     $display("--- test 2: the host answers, the line sharpens");
     serve_all;
-    settle_line(0);
+    settle_line(0, 1'b1);
     want(settled == 1, "the line draws once its tiles have arrived");
     want(seen == OUT_W, "the line emitted its pixels once its tiles were in");
     for (att = 0; att < 6 && bad_fine != 0; att = att + 1) begin
@@ -384,7 +390,7 @@ initial begin
     coarse_only = 1;
     serve_all;
     coarse_only = 0;
-    settle_line(0);
+    settle_line(0, 1'b0);
     want(settled == 1, "the line draws from the level below");
     want(seen == OUT_W, "the fallback line emitted its pixels");
     want(bad_coarse == 0, "every pixel is the coarse level's, two by two");
@@ -399,8 +405,9 @@ initial begin
         repeat (TILE_RETRY_TB + 20) @(posedge clk);
     end
     want(bad_fine == 0, "the picture sharpened once the fine tiles arrived");
+    settle_line(0, 1'b1);              // answer whatever the sharpening still wants
     miss_before = tile_misses;
-    run_line(0, 700);
+    run_line(0, 900);
     want(seen == OUT_W && bad_fine == 0, "and stays sharp without help");
     want(tile_misses == miss_before, "no tile was missed once both levels were in");
 

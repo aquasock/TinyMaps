@@ -69,7 +69,7 @@ wire [14:0] lk_tx, lk_ty;
 wire        lk_hit;
 wire [24:0] lk_addr;
 
-maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN), .TILED(1'b1)) dut (
+maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN)) dut (
     .clk(clk), .resetn(resetn),
     .src_x0(src_x0), .src_y0(src_y0), .step_x(step_x), .step_y(step_y),
     .bilinear(bilinear),
@@ -80,7 +80,7 @@ maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN), .TILED(1'b1)) dut (
     .cx(cx), .cy(cy),
     .fetch_count(fetch_count),
     .out_x(out_x), .out_rgb(out_rgb), .out_idx(out_idx), .out_valid(out_valid),
-    .tile_level(2'd0),
+    .stream(1'b1), .tile_level(2'd0),
     .seq_level(seq_level),
     .seq_start(seq_start), .seq_entry(seq_entry),
     .seq_row(seq_row), .seq_span(seq_span),

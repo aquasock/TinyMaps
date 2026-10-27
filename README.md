@@ -199,6 +199,12 @@ the tile is resident only when the block that ends it passes its CRC and the por
 has drained. The pool is the four megabytes above the pack's 27.62,
 `0x01C0_0000` to the top of the part: 64 slots of 64 KiB.
 
+Command `0x1E` is one byte that says which source the picture is drawn from:
+zero is the pack, which is what runs until a host says otherwise, and one is the
+tile pool. It is answered ACK. The pool cannot answer itself, so streaming mode
+before a tile server exists is an empty pool and a blank picture; that is why the
+mode is the host's to choose and not a property of the bitstream.
+
 The receiver parses the link's frames itself -- `0xAA len_hi len_lo cmd
 payload`, the length big-endian counting the command byte and below 2048 -- and
 takes the payload of command `0x07`. `maps_uart_rx` and `maps_uart_tx` carry the

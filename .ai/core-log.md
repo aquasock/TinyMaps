@@ -1294,3 +1294,45 @@ Turn `TILED` on in the top: instantiate the sequencer, the page table and the re
 - User Test: NOT RUN
 
 ---
+
+## 38 COMMIT Unreleased 2026-10-27T09:05:56-07:00
+
+#### Coming From:
+
+Unreleased 68a85ea
+
+#### Purpose:
+
+Put the streaming path in the top and give the host the switch that turns it on, so the fabric can stream without the bitstream deciding to.
+
+#### Outcome:
+
+`tinymaps_top` now carries the sequencer, the page table and the request queue beside the renderer, muxes the video channel between the renderer's own linear fetch and the sequencer's chunk read, and shares the link's transmitter between the loader's answers and the tile requests. The switch is command `0x1E`, one byte, and it defaults to the pack, because the pool cannot answer itself: until the host serves tiles, streaming mode is an empty pool and a blank picture, so the mode belongs to the host and not to the bitstream. `maps_render`'s `TILED` parameter became a `stream` port for that reason, and both fetch paths are built with one of them running. The level number the sequencer needs is recovered from the pack's base against the level table, because the streaming path asks for the level *below* the view and the table is the only thing that knows the addresses; the numbering is the pack's, finest first, so the fallback asks for one higher and level 3 falls back to nothing. Two changes were needed before the transmitter could be shared. A request keeps the line from the first byte the arbiter actually takes rather than from the offer, so losing arbitration does not stall the answer that won it; and `maps_link_rx`'s sender now waits for the line before offering a reply byte, which is what stops an ACK starting inside a request frame -- without that an interrupted request frame and an interleaved NAK would both be misparsed. `sim/tb_maps_link_rx.sv` gained a test for `0x1E`: off before it is asked, on when it is, and back again, each answered. Three of the failures along the way were the testbench being out of step with the design rather than the design being wrong: its settle loop stopped on a good line while a request from that same line was still outstanding, its expected coarse level followed the old numbering, and `tb_maps_line_store` and `tb_maps_render` needed the new port tied low. Seventeen of seventeen testbenches pass with `check_render` and `check_tmds`, and eight of eight seeds pack from 77.97 to 83.51 MHz with the whole streaming path in the netlist, so the sequencer, the table and the queue cost about four megahertz of the margin. Nothing was deployed. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The tile server on the TinyTang side: something has to decode the `0x1C` request frames and answer with `0x1D` blocks read from the card, and until it exists command `0x1E` switches the picture to an empty pool. The first hardware test after that is the one this whole line of work is for -- pan onto ground that is not resident and watch it arrive soft and sharpen -- and it needs the pack's coarse level resident in the pool first, since the fallback draws from it. After that, prefetch and eviction, which need the pool to report when it is full, and 4bpp in the pixel path.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/maps_render.sv
+- fpga/tinymaps/maps_tile_req.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_line_store.sv
+- sim/tb_maps_link_rx.sv
+- sim/tb_maps_render.sv
+- sim/tb_maps_render_tiled.sv
+- sim/tb_maps_stream.sv
+- tools/maps_open/synth.ys
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

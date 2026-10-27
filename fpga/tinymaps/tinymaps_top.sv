@@ -174,11 +174,54 @@ wire [11:0] render_x;
 wire        render_valid;
 wire [2:0]  render_state;
 
-wire        vrd_rd_start;
-wire [24:0] vrd_rd_addr;
-wire [15:0] vrd_rd_count;
+// The video channel's request: the renderer's own linear fetch when the picture
+// comes from the pack, the tile sequencer's chunk read when it comes from the
+// pool.  One of the two is running at a time, so the channel is muxed rather
+// than arbitrated.
+wire        rnd_rd_start;
+wire [24:0] rnd_rd_addr;
+wire [15:0] rnd_rd_count;
+wire        sq_rd_start;
+wire [24:0] sq_rd_addr;
+wire [15:0] sq_rd_count;
+wire        vrd_rd_start = stream_on ? sq_rd_start : rnd_rd_start;
+wire [24:0] vrd_rd_addr  = stream_on ? sq_rd_addr  : rnd_rd_addr;
+wire [15:0] vrd_rd_count = stream_on ? sq_rd_count : rnd_rd_count;
 wire [15:0] vrd_rd_data;
 wire        vrd_rd_valid;
+
+// ----------------------------------------------------------- tile streaming ---
+// The sequencer turns the renderer's row window into per-tile chunk reads, the
+// page table says where a tile is, and the request queue asks the host for the
+// ones that are not there.  None of it runs until the host says so with command
+// 0x1E: with nothing answering, streaming mode is an empty pool and a blank
+// picture, so the mode is the host's to choose and not the bitstream's.
+wire        stream_on;
+reg  [1:0]  LEVEL_N = 2'd0;
+wire [1:0]  seq_level;
+wire        seq_start;
+wire [13:0] seq_entry;
+wire [11:0] seq_row;
+wire [15:0] seq_span;
+wire        seq_we;
+wire [9:0]  seq_widx;                  // $clog2(OUT_W/2 + 4)
+wire [15:0] seq_wdata;
+wire        seq_done, seq_miss;
+wire [15:0] tile_misses;
+wire        seq_busy;
+wire [1:0]  miss_level;
+wire [14:0] miss_tx, miss_ty;
+wire        lk_valid, lk_hit;
+wire [14:0] lk_tx, lk_ty;
+wire [24:0] lk_addr;
+wire        ld_tx_start;
+wire [7:0]  ld_tx_data;
+wire        req_tx_start;
+wire [7:0]  req_tx_data;
+wire        req_hold;
+wire        req_ack = req_tx_start && !ld_tx_start;
+wire        utx_start = ld_tx_start | req_tx_start;
+wire [7:0]  utx_data  = ld_tx_start ? ld_tx_data : req_tx_data;
 
 // One line ahead of the raster.  The line boundary crosses into fclk as a
 // toggle, not as the ten-bit counter: a multi-bit value changing under another
@@ -286,13 +329,30 @@ maps_nav #(.OUT_W(OUT_W), .OUT_H(OUT_H)) u_nav (
     .o_step(nav_step), .o_x0(nav_x0), .o_y0(nav_y0), .busy()
 );
 
-maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(OUT_W/2 + 4)) u_render (
+localparam int SPAN = OUT_W/2 + 4;           // entries per source row
+
+// Which level the view is over, finest first, recovered from the base it was
+// given: the level table is the only thing here that knows the pack's
+// addresses, and the streaming path needs the *number*, because the fallback
+// asks for the level below it.
+always @(posedge hclk)
+    if      (LEVEL_BASE == lv_base1) LEVEL_N <= 2'd1;
+    else if (LEVEL_BASE == lv_base2) LEVEL_N <= 2'd2;
+    else if (LEVEL_BASE == lv_base3) LEVEL_N <= 2'd3;
+    else                             LEVEL_N <= 2'd0;
+
+maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN)) u_render (
     .clk(hclk), .resetn(rstn_h),
     .src_x0(SRC_X0), .src_y0(SRC_Y0), .step_x(STEP), .step_y(STEP),
     .bilinear(1'b1),
     .level_base(LEVEL_BASE), .level_w(LEVEL_W), .level_h(LEVEL_H),
-    .rd_start(vrd_rd_start), .rd_addr(vrd_rd_addr), .rd_count(vrd_rd_count),
+    .rd_start(rnd_rd_start), .rd_addr(rnd_rd_addr), .rd_count(rnd_rd_count),
     .rd_data(vrd_rd_data), .rd_valid(vrd_rd_valid),
+    .stream(stream_on), .tile_level(LEVEL_N[1:0]), .seq_level(seq_level),
+    .seq_start(seq_start), .seq_entry(seq_entry),
+    .seq_row(seq_row), .seq_span(seq_span),
+    .seq_we(seq_we), .seq_widx(seq_widx), .seq_wdata(seq_wdata),
+    .seq_done(seq_done), .seq_miss(seq_miss), .tile_misses(tile_misses),
     .pal_we(pal_we), .pal_idx(pal_idx), .pal_data(pal_data),
     .cx(cx), .cy(rc_cy),
     .fetch_count(),
@@ -327,8 +387,6 @@ wire [63:0] sd_rdata;
 // video line and gives the video priority, so a load cannot stall a line.
 wire [7:0]  urx_data;
 wire        urx_valid;
-wire        utx_start;
-wire [7:0]  utx_data;
 wire        utx_busy;
 wire        ld_req;
 wire [24:3] ld_addr;
@@ -365,10 +423,36 @@ maps_uart_tx #(.CLK_HZ(74_250_000), .BAUD(LINK_BAUD), .OVERSAMPLE(LINK_OVERSAMPL
     u_uart_tx (.clk(hclk), .resetn(rstn_h), .start(utx_start), .data(utx_data),
                .tx(uart_tx), .busy(utx_busy));
 
+maps_tile_fetch #(.SPAN(SPAN), .TSIZE(256), .TENT(128), .TW(8)) u_seq (
+    .clk(hclk), .resetn(rstn_h),
+    .start(seq_start), .level(seq_level), .row(seq_row), .entry0(seq_entry),
+    .span(seq_span),
+    .busy(seq_busy), .done(seq_done), .miss(seq_miss),
+    .miss_level(miss_level), .miss_tx(miss_tx), .miss_ty(miss_ty),
+    .we(seq_we), .widx(seq_widx), .wdata(seq_wdata),
+    .lk_valid(lk_valid), .lk_tx(lk_tx), .lk_ty(lk_ty),
+    .lk_hit(lk_hit), .lk_addr(lk_addr),
+    .rd_start(sq_rd_start), .rd_addr(sq_rd_addr), .rd_count(sq_rd_count),
+    .rd_data(vrd_rd_data), .rd_valid(vrd_rd_valid));
+
+// Ask for what is not there.  A request is not acknowledged: the answer is the
+// tile's bytes arriving as command 0x1D, and one that goes unanswered is asked
+// again when the renderer retries.
+maps_tile_req #(.DEPTH(8)) u_req (
+    .clk(hclk), .resetn(rstn_h),
+    .miss(seq_miss), .miss_level(miss_level),
+    .miss_tx(miss_tx), .miss_ty(miss_ty),
+    .tx_grant(!ld_tx_start), .tx_ready(!utx_busy), .tx_ack(req_ack),
+    .tx_start(req_tx_start), .tx_data(req_tx_data), .req_hold(req_hold),
+    .count(), .overflow());
+
 maps_link_rx #(.TILES(1'b1)) u_loader (
     .clk(hclk), .resetn(rstn_h),
     .rx_data(urx_data), .rx_valid(urx_valid),
-    .tx_start(utx_start), .tx_data(utx_data), .tx_busy(utx_busy),
+    .tx_start(ld_tx_start), .tx_data(ld_tx_data),
+    // the queue's frame holds the line, so a reply cannot start inside it
+    .tx_busy(utx_busy | req_hold),
+    .stream_on(stream_on),
     .wr_req(ld_req), .wr_addr(ld_addr), .wr_lanes(ld_lanes),
     .wr_wdata(ld_wdata), .wr_ack(sd_ack),
     .pal_we(ld_pal_we), .pal_idx(ld_pal_idx), .pal_data(ld_pal_data),
@@ -403,8 +487,9 @@ wire [24:0] fill_addr;
 
 maps_tiles #(.SLOTS(POOL_SLOTS), .TBITS(16), .POOL_BASE(POOL_BASE)) u_tiles (
     .clk(hclk), .resetn(rstn_h),
-    .lk_valid(1'b0), .lk_level(2'd0), .lk_tx(15'd0), .lk_ty(15'd0),
-    .lk_hit(), .lk_addr(),
+    // the sequencer asks, about the level it is actually fetching
+    .lk_valid(lk_valid), .lk_level(seq_level), .lk_tx(lk_tx), .lk_ty(lk_ty),
+    .lk_hit(lk_hit), .lk_addr(lk_addr),
     .fill_commit(fill_commit), .fill_level(fill_level),
     .fill_tx(fill_tx), .fill_ty(fill_ty), .fill_addr(fill_addr),
     .hits(), .misses(), .idle()

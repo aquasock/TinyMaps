@@ -324,8 +324,12 @@
   thing tiling needed: a line whose own level cannot answer is drawn from the
   level below, two output pixels per coarse pixel, and it sharpens when the tile
   arrives, on a `TILE_RETRY` epoch.  `TILED` is still off in the top -- turning it
-  on is the next cycle, with the sequencer and the request queue instantiated
-  beside the renderer.  See `docs/streaming-scope.md`.
+  on is a command away: the sequencer, the page table and the request queue are
+  instantiated in the top and the video channel is muxed between the renderer's
+  linear fetch and the sequencer's chunk read, waiting on command `0x1E` from a
+  host that can serve tiles.  The pack remains the default, so the bitstream
+  behaves as it did until something says otherwise.  What is missing is the tile
+  server on the TinyTang side.  See `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The

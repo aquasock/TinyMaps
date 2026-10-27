@@ -47,6 +47,7 @@ localparam int    TB_SLOTS = 8;
 wire [1:0]  fill_level;
 wire [14:0] fill_tx, fill_ty;
 wire        fill_commit;
+wire        stream_on;
 wire [24:0] fill_addr;
 
 reg         commit_seen = 0;
@@ -151,6 +152,7 @@ maps_link_rx #(.TILES(1'b1)) dut (
     .wr_wdata(wr_wdata), .wr_ack(wr_ack),
     .fill_level(fill_level), .fill_tx(fill_tx), .fill_ty(fill_ty),
     .fill_addr(fill_addr), .fill_commit(fill_commit),
+    .stream_on(stream_on),
     .busy(busy), .images(images), .bytes_written(bytes_written),
     .last_nak(last_nak), .overflows(overflows), .timeouts(timeouts)
 );
@@ -392,6 +394,21 @@ initial begin
 
     if (overflows !== 0) begin $display("FAIL: %0d write-port overflows", overflows); errors = errors + 1; end
     else $display("PASS: no write-port overflows");
+
+    // 4b. which source the picture comes from: one byte, answered, and the pack
+    //     is what happens when nothing has said otherwise
+    $display("--- test 4b: the picture source is the host's to choose");
+    if (stream_on !== 1'b0) begin $display("FAIL: streaming on before it was asked"); errors = errors + 1; end
+    txbuf[0] = 8'd1;
+    send_cmd(8'h1E, 0, 1);
+    expect_byte(8'h06, "stream on ACK");
+    if (stream_on !== 1'b1) begin $display("FAIL: streaming did not turn on"); errors = errors + 1; end
+    else $display("PASS: streaming turns on when the host says so");
+    txbuf[0] = 8'd0;
+    send_cmd(8'h1E, 0, 1);
+    expect_byte(8'h06, "stream off ACK");
+    if (stream_on !== 1'b0) begin $display("FAIL: streaming did not turn off"); errors = errors + 1; end
+    else $display("PASS: and back to the pack when it says that");
 
     // 5. a tile block lands at the slot the table named, not at an address the
     //    host picked, and answers ACK

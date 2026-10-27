@@ -29,10 +29,13 @@
 // time, and asking again is the only thing this module can do about it.
 //
 // The transmitter is shared with the loader's answers, so a frame is offered
-// only while the arbiter grants it, and it keeps the grant until the frame is
-// done.  A byte is offered until the arbiter acknowledges it, which makes lost
-// arbitration a retry rather than a hole in the middle of a frame: a frame with
-// a byte missing is worse than a frame that is late.
+// only while the arbiter grants it, and it keeps the grant from the first byte it
+// actually gets until the last.  A byte is offered until the arbiter
+// acknowledges it, which makes lost arbitration a retry rather than a hole in
+// the middle of a frame: a frame with a byte missing is worse than a frame that
+// is late.  `req_hold` rises on the first acknowledgement and not on the offer,
+// because a lost offer has not taken the line -- claiming it there would stall
+// the loader's answer that won.
 //
 // SPDX-License-Identifier: GPL-3.0-only
 `timescale 1ns / 1ps
@@ -112,8 +115,6 @@ localparam [0:0] R_IDLE = 1'b0, R_SEND = 1'b1;
 reg       st;
 reg [3:0] bi = 4'd0;                   // which byte of the frame is being offered
 
-assign req_hold = (st != R_IDLE);
-
 // the last byte of a frame being taken retires its request.  A push can land on
 // that same edge, so the depth is computed from both events at once: two
 // assignments to one register in one cycle keep the last, which loses the push
@@ -121,10 +122,15 @@ assign req_hold = (st != R_IDLE);
 // queue and not counted is a request that never goes out.
 wire pop = (st == R_SEND) && tx_ack && (bi == LAST);
 
+// the line is ours only once a byte has been taken
+reg taken;
+assign req_hold = (st == R_SEND) && taken;
+
 always @(posedge clk) begin
     if (!resetn) begin
         st <= R_IDLE;
         bi <= 4'd0;
+        taken <= 1'b0;
         head <= '0; tail <= '0; cnt <= '0;
         tx_start <= 1'b0; tx_data <= 8'd0;
         overflow <= 1'b0;
@@ -143,6 +149,7 @@ always @(posedge clk) begin
 
         case (st)
         R_IDLE: if (cnt != 0 && tx_grant && tx_ready) begin
+            taken    <= 1'b0;
             tx_start <= 1'b1;
             tx_data  <= frame_byte(4'd0, q_level, q_tx, q_ty);
             bi       <= 4'd0;
@@ -153,6 +160,7 @@ always @(posedge clk) begin
         // ten bit times after an acknowledgement, so the next byte is offered
         // when `tx_ready` comes back rather than in the acknowledging cycle.
         R_SEND: if (tx_ack) begin
+            taken <= 1'b1;
             if (bi == LAST) begin
                 head <= head + 1'b1;
                 st   <= R_IDLE;
