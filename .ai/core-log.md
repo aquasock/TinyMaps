@@ -1226,3 +1226,36 @@ The renderer's miss has to reach `maps_tile_req` and the coarse-level fallback h
 - User Test: NOT RUN
 
 ---
+
+## 36 COMMIT Unreleased 2026-10-27T08:11:33-07:00
+
+#### Coming From:
+
+Unreleased 303e281
+
+#### Purpose:
+
+Close the streaming loop -- a miss becomes a request, an answer becomes a resident tile, and the line draws from it -- and fix the stall that made the loop impossible.
+
+#### Outcome:
+
+`sim/tb_maps_stream.sv` wires the renderer in tile mode, the chunk sequencer, the real page table and the request queue the way the top will, and models the one piece that does not exist yet: the host, answering a request with a tile written where the table says and committed when whole. A line over an empty pool misses, the request goes out naming the tile the line's first pixel lives in, and after the answer the same line draws all sixty-four of its pixels, each the level's own byte at that source position. Tiles three columns away and one row away are covered, and so is a pan, with the picture converging as answers arrive because a single fetch stops at the first tile it does not have. Building it found that a miss was a permanent stall: the blocking fetch waits for `f_ack`, a miss never raises it, and the line engine waited for ever -- no pixels, no second request, nothing. `maps_render` now sets a flag on a miss that the blocking path sees, waits `TILE_RETRY` clocks (2^21, about 28 ms at 74.25 MHz, roughly a fifth of the time a 64 KiB tile takes over the link) and issues the same fetch again; without a timer a miss would re-ask once per line and fill the request queue with duplicates, and without any retry a tile that arrived late would leave the picture waiting on nothing. Three of the failures along the way were in the testbench rather than the design: it instantiated the sequencer twice instead of wiring one instance to both the table and the queue, it computed each expected pixel from the output column instead of the viewport origin, and it drove `cy` to a source row -- `cy` is an output row and the renderer only draws below `OUT_H`, so the "row 256" test ran no line at all. The bench also learned to hunt for `0xAA` when decoding request frames, because a frame cut short by a phase boundary shifted every later one. Seventeen of seventeen testbenches pass with `check_render` and `check_tmds`, and eight of eight seeds pack from 77.97 to 86.53 MHz, so the retry logic costs nothing in the built design -- where it is also unreachable, because `TILED` is still off. Nothing was deployed. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The coarse fallback, which is the last thing between this and tiling on the board: a line whose fine tile is missing has to be drawn from the coarser level, which stays resident, so an empty pool at boot shows a soft map instead of stalling every line on its retry timer. That is also what turns `TILED` on in the top, where the sequencer and the request queue get instantiated beside the table and the retry stops being unreachable code. After that, prefetch and eviction, which need the pool to report when it is full, and 4bpp in the pixel path.
+
+#### Files Modified:
+
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_render.sv
+- sim/tb_maps_stream.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

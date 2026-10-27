@@ -39,7 +39,15 @@ module maps_render #(
     // fetch through the tile pool instead of a linear level address.  Off by
     // default so the linear path stays what everything else was verified against;
     // a build that streams turns it on and supplies the sequencer's ports.
-    parameter bit TILED = 1'b0
+    parameter bit TILED = 1'b0,
+    // How long the blocking fetch waits after a tile it needs is missing before
+    // it asks again, in clocks.  A request is not acknowledged, so this is the
+    // only thing that re-asks when the answer has not come; too short and the
+    // link carries a request per line, too long and a tile that arrived leaves
+    // the picture waiting on a timer.  2^21 clocks is about 28 ms at 74.25 MHz,
+    // roughly a fifth of the time a 64 KiB tile takes over the link.  It is a
+    // parameter so a testbench can shorten the wait to something watchable.
+    parameter int TILE_RETRY = 21'h1F_FFFF
 ) (
     input  wire        clk,
     input  wire        resetn,
@@ -159,6 +167,7 @@ reg [15:0] emit_x;
 reg [31:0] acc_x;
 reg [1:0]  fre;
 reg [2:0]  block_step;
+reg [2:0]  block_retry;                // where the blocking fetch resumes
 
 // fetch engine, serviced every cycle by the block below so it runs under S_EMIT
 reg        f_req;
@@ -167,6 +176,8 @@ reg        f_ack;
 reg [1:0]  f_buf;
 reg [AIDX-1:0] f_j;
 reg [31:0] f_row, f_col;
+reg        f_missed;                  // a fetch was refused by the pool
+reg [20:0] retry_cnt;                 // and this is how long before it asks again
 reg [24:0] f_base;
 reg [15:0] f_cnt;
 
@@ -234,6 +245,7 @@ always @(posedge clk or negedge resetn) begin
         brow[0] <= 32'hFFFFFFFF; brow[1] <= 32'hFFFFFFFF; brow[2] <= 32'hFFFFFFFF;
         bval <= 3'b000; col_tag <= 32'hFFFFFFFF;
         f_req <= 1'b0; f_busy <= 1'b0; f_ack <= 1'b0; f_buf <= 2'd0;
+        f_missed <= 1'b0; retry_cnt <= 21'd0; block_retry <= 3'd0;
         f_j <= {AIDX{1'b0}}; f_row <= 32'd0; f_col <= 32'd0;
         f_base <= 25'd0; f_cnt <= 16'd0;
         p1_v <= 1'b0; p1_odd <= 1'b0; p1_bil <= 1'b0; p1_x <= 12'd0;
@@ -273,8 +285,12 @@ always @(posedge clk or negedge resetn) begin
                 col_tag     <= f_col;
             end else if (src_miss) begin
                 // the tile is not in the pool: leave the row unmarked, so the
-                // line engine does not treat it as landed, and count it
+                // line engine does not treat it as landed, count it, and start
+                // the wait before asking again.  The blocking path waits for
+                // `f_ack`, so without this a miss is a permanent stall.
                 f_busy      <= 1'b0;
+                f_missed    <= 1'b1;
+                retry_cnt   <= TILE_RETRY[20:0];
                 tile_misses <= tile_misses + 16'd1;
             end else if (!TILED && rd_valid) begin
                 f_j <= f_j + 1'b1;
@@ -385,7 +401,9 @@ always @(posedge clk or negedge resetn) begin
                 f_base <= level_base + (r0 * level_w) + {1'b0, k0_pf[22:0], 1'b0};
                 block_step <= 3'd1;
             end
-            3'd1: if (f_ack) begin block_step <= 3'd2; end
+            3'd1: if (f_ack) block_step <= 3'd2;
+                  else if (f_missed) begin f_missed <= 1'b0;
+                                          block_retry <= 3'd0; block_step <= 3'd7; end
             3'd2: block_step <= 3'd3;               // one clear cycle between requests
             3'd3: if (!f_busy) begin
                 f_req  <= 1'b1; f_buf <= 2'd1; f_row <= r1; f_cnt <= SPAN;
@@ -393,7 +411,9 @@ always @(posedge clk or negedge resetn) begin
                 f_base <= level_base + (r1 * level_w) + {1'b0, k0_pf[22:0], 1'b0};
                 block_step <= 3'd4;
             end
-            3'd4: if (f_ack) begin block_step <= 3'd5; end
+            3'd4: if (f_ack) block_step <= 3'd5;
+                  else if (f_missed) begin f_missed <= 1'b0;
+                                          block_retry <= 3'd3; block_step <= 3'd7; end
             // Prime the third buffer for the next line and *wait* for it.  It
             // was issued and left running while this line drew, which loses the
             // race: a row fetch takes about 1340 clocks and the emit takes
@@ -408,13 +428,20 @@ always @(posedge clk or negedge resetn) begin
                 f_base <= level_base + r_addr + {1'b0, k0_pf[22:0], 1'b0};
                 block_step <= 3'd6;
             end
-            3'd6: if (f_ack) begin
+            3'd6: if (f_missed) begin
+                f_missed    <= 1'b0;
+                block_retry <= 3'd5;
+                block_step  <= 3'd7;
+            end else if (f_ack) begin
                 emit_x     <= 16'd0;
                 acc_x      <= src_x0;
                 rd_idx     <= {AIDX{1'b0}};
                 block_step <= 3'd0;
                 st         <= S_EMIT;
             end
+            // wait after a miss, then try the same fetch again
+            3'd7: if (retry_cnt != 21'd0) retry_cnt <= retry_cnt - 21'd1;
+                  else block_step <= block_retry;
             default: st <= S_BFETCH;
             endcase
         end

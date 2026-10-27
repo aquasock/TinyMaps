@@ -313,7 +313,15 @@
   ends at 27.62 MiB, so the pool takes the four megabytes above 28 as 64 slots of
   64 KiB, ending at the top of the part.  `TILES` is on, `maps_tiles` is
   instantiated, and a tile the host sends lands there and is committed -- but
-  nothing looks a tile up yet, because the renderer still fetches linearly.  See
+  nothing looks a tile up yet, because the renderer still fetches linearly.
+  The whole loop is proven in `sim/tb_maps_stream.sv`, which wires the renderer in
+  tile mode, the sequencer, the table and the request queue to a model of the host
+  and shows a miss becoming a request, an answer becoming a resident tile, and the
+  line drawing the level's own pixels afterwards.  Doing that found a permanent
+  stall: a missed fetch left the blocking path waiting for an acknowledgement that
+  a miss never gives, so the line engine stopped for good; a retry timer now reasks
+  after `TILE_RETRY` clocks.  `TILED` stays off in the top because without a coarse
+  fallback an empty pool at boot would stall every line.  See
   `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer

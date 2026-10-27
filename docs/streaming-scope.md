@@ -264,10 +264,32 @@ testbench than from a rebuilt renderer.
   mux.  That one multiplier took the whole design from 84.35 to 70.15 MHz at seed
   1 and failed seven of eight seeds.  Written as a shift and a subtract it is the
   same hash and the same slots, and the sweep is back to 75.46 through 88.40.
-- **Next: the renderer's miss has to reach `maps_tile_req`**, and the coarse
-  fallback has to draw something while the tile is on its way, which is what makes
-  the renderer's not retrying a missed row harmless.  Then prefetch and eviction,
-  then 4bpp in the pixel path.
+- **Done: the loop closes.** `sim/tb_maps_stream.sv` wires the renderer in tile
+  mode, the chunk sequencer, the real page table and the request queue the way the
+  top will, and models the only part that does not exist yet -- the host, which
+  answers a request with a tile.  A line over an empty pool misses, the request
+  goes out naming the tile the line's first pixel lives in, the host's answer is
+  written where the table says and committed, and the same line then draws, pixel
+  for pixel, from the tile that just arrived.  Tiles that are three columns or one
+  row away are covered, and so is a pan: the picture converges as answers arrive,
+  because one fetch stops at the first tile it does not have and there are more
+  tiles than one answer.
+- **A miss used to be a permanent stall.** The blocking fetch waits for `f_ack`,
+  and a miss never raises it, so once a fetch was refused the line engine waited
+  for ever: no pixels, no second request, nothing.  The miss now sets a flag the
+  blocking path sees and starts a retry timer (`TILE_RETRY`, 2^21 clocks, about
+  28 ms at 74.25 MHz, roughly a fifth of the time a 64 KiB tile takes over the
+  link).  Without that timer a miss would re-ask once per line and fill the queue
+  with duplicates; without any retry at all a tile that arrived late would leave
+  the picture waiting on nothing.
+- **The top still has `TILED` off.** With tiling on and no coarse fallback, an
+  empty pool at boot means every line stalls on its retry timer and the screen
+  shows nothing -- worse than not streaming at all.  The fallback is what turns it
+  on, so it is the next piece.
+- **Next: the coarse fallback** -- a line whose fine tile is missing should be
+  drawn from the coarser level, which stays resident -- and then `TILED` on in the
+  top with the sequencer and the request queue instantiated beside the table.
+  Then prefetch and eviction, then 4bpp in the pixel path.
 
 **A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
 At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the
