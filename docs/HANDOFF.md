@@ -305,8 +305,14 @@
   because a missed row is not retried.  The request has a shape now:
   `maps_tile_req.sv` turns a miss into a `0xAA 00 06 1C L TXH TXL TYH TYL`
   frame on the link, deduped within its queue and holding the transmitter for
-  the whole frame so the loader's answers cannot interleave with it.  Nothing
-  answers those frames yet.  See `docs/streaming-scope.md`.
+  the whole frame so the loader's answers cannot interleave with it.  The answer
+  exists too: command `0x1D` carries one block of one tile, the loader writes it
+  to the slot the page table derives and tells the table the tile is resident
+  only when the block that ends it has passed its CRC and the write port has
+  drained.  Both halves are proven in simulation and neither is in the top: the
+  tile command is behind `TILES`, which is off, because the pack occupies 27.62
+  MiB of the dock's 32 and the pool's base is inside it -- a tile written today
+  would land on the picture.  See `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The

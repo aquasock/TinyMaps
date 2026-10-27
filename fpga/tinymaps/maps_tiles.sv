@@ -28,6 +28,14 @@
 // failure this design cannot tolerate, and relying on an initial block to clear
 // 512 entries is relying on the toolchain to initialise memory it may not.
 //
+// Filling is two things and not one.  `fill_addr` answers "where do these
+// coordinates' bytes belong", and it is a function of the coordinates rather
+// than an event, because the loader needs the address *before* it has the bytes.
+// `fill_commit` is the event: the tile's last block is in the pool and the slot
+// now holds that tile.  Marking it resident when the address was handed out
+// would make a half-written tile a hit, which is the same failure as a garbage
+// tag and would draw whatever was in the pool before.
+//
 // SPDX-License-Identifier: GPL-3.0-only
 `timescale 1ns / 1ps
 
@@ -48,13 +56,15 @@ module maps_tiles #(
     output reg         lk_hit,
     output reg  [24:0] lk_addr,
 
-    // a tile has landed; the slot is the hash of its coordinates, so the loader
-    // is told where to put the bytes rather than choosing a slot itself
-    input  wire        fill_valid,
+    // where does a tile's content belong?  a function of the coordinates, taken
+    // before the bytes exist
     input  wire [1:0]  fill_level,
     input  wire [14:0] fill_tx,
     input  wire [14:0] fill_ty,
-    output reg  [24:0] fill_addr,      // where those bytes belong in the pool
+    output wire [24:0] fill_addr,      // where those bytes belong in the pool
+
+    // and this is the tile landing: the bytes above are all in the pool
+    input  wire        fill_commit,
 
     // how often it has answered either way, for the link's status command
     output reg  [15:0] hits,
@@ -88,11 +98,15 @@ reg          pend = 1'b0;          // a lookup was presented last cycle
 reg [SW-1:0] pend_slot = '0;
 reg [31:0]   pend_tag = 32'd0;
 
+// the address is the hash and nothing else, so it needs no state: the loader can
+// ask where a tile's bytes belong the cycle it knows the coordinates, and write
+// them as they arrive instead of buffering a whole tile
+assign fill_addr = POOL_BASE[24:0] + (fill_slot_h << TBITS);
+
 always @(posedge clk) begin
     if (!resetn) begin
         pend <= 1'b0;
         vbit <= '0;
-        fill_addr <= 25'd0;
         lk_hit <= 1'b0; lk_addr <= 25'd0;
         hits <= 16'd0; misses <= 16'd0;
     end else begin
@@ -104,15 +118,15 @@ always @(posedge clk) begin
             pend <= 1'b0;
         end
 
-        if (fill_valid) begin
+        // the tile is whole and in the pool: now it is resident
+        if (fill_commit) begin
             tag[fill_slot_h]  <= fill_tag;
             vbit[fill_slot_h] <= 1'b1;
-            fill_addr <= POOL_BASE[24:0] + (fill_slot_h << TBITS);
         end
 
         lk_hit <= 1'b0;
         if (pend) begin
-            // the tag read this cycle is the one at pend_slot; a fill in the
+            // the tag read this cycle is the one at pend_slot; a commit in the
             // same cycle lands after it, which is the ordering a cache promises
             if (vbit[pend_slot] && tag[pend_slot] == pend_tag) begin
                 lk_hit  <= 1'b1;

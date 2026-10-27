@@ -31,7 +31,7 @@ wire       lk_hit;
 wire [24:0] lk_addr;
 wire [24:0] fill_addr;
 
-reg        fill_valid = 1'b0;
+reg        fill_commit = 1'b0;
 reg  [1:0] fill_level = 2'd0;
 reg [14:0] fill_tx = 15'd0, fill_ty = 15'd0;
 
@@ -43,7 +43,7 @@ maps_tiles #(.SLOTS(SLOTS), .TBITS(TBITS), .POOL_BASE(POOL)) dut (
     .clk(clk), .resetn(resetn),
     .lk_valid(lk_valid), .lk_level(lk_level), .lk_tx(lk_tx), .lk_ty(lk_ty),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
-    .fill_valid(fill_valid), .fill_level(fill_level),
+    .fill_commit(fill_commit), .fill_level(fill_level),
     .fill_tx(fill_tx), .fill_ty(fill_ty), .fill_addr(fill_addr),
     .hits(hits), .misses(misses), .idle(idle));
 
@@ -58,15 +58,19 @@ begin
 end
 endtask
 
-// fill a tile; the slot is the table's business, and it reports the address it
-// put it at in fill_addr
+// fill a tile: the address is a function of the coordinates, and the commit is
+// the event that makes it resident.  Both are needed now -- the address before
+// the bytes and the commit after them -- because a tile marked resident while
+// its bytes are still arriving is a hit on a half-written tile.
 task automatic fill(input [1:0] lvl, input [14:0] tx, input [14:0] ty);
 begin
     @(posedge clk);
-    fill_valid = 1'b1; fill_level = lvl; fill_tx = tx; fill_ty = ty;
+    fill_level = lvl; fill_tx = tx; fill_ty = ty;
     @(posedge clk);
-    fill_valid = 1'b0;
+    fill_commit <= 1'b1;
     @(posedge clk);
+    fill_commit <= 1'b0;
+    repeat (2) @(posedge clk);
 end
 endtask
 

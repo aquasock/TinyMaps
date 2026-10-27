@@ -61,7 +61,7 @@ wire [15:0] seq_wdata;
 wire        seq_done, seq_miss;
 wire [15:0] tile_misses;
 wire [15:0] t_hits, t_misses;
-reg        fill_valid = 1'b0;
+reg        fill_commit = 1'b0;
 reg [14:0] fill_tx = 15'd0, fill_ty = 15'd0;
 wire        lk_valid;
 wire [14:0] lk_tx, lk_ty;
@@ -102,7 +102,7 @@ maps_tiles #(.SLOTS(SLOTS), .TBITS(TBITS), .POOL_BASE(POOL)) u_tiles (
     .clk(clk), .resetn(resetn),
     .lk_valid(lk_valid), .lk_level(2'd0), .lk_tx(lk_tx), .lk_ty(lk_ty),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
-    .fill_valid(fill_valid), .fill_level(2'd0),
+    .fill_commit(fill_commit), .fill_level(2'd0),
     .fill_tx(fill_tx), .fill_ty(fill_ty),
     .fill_addr(),
     .hits(t_hits), .misses(t_misses), .idle());
@@ -165,9 +165,9 @@ begin
     // it, and the fill silently does not happen
     fill_tx = 15'd0; fill_ty = 15'd0;
     @(posedge clk);
-    fill_valid <= 1'b1;
+    fill_commit <= 1'b1;
     @(posedge clk);
-    fill_valid <= 1'b0;
+    fill_commit <= 1'b0;
     repeat (2) @(posedge clk);
 end
 endtask

@@ -71,6 +71,31 @@
 // one repeated row says the renderer is drawing the same source line every
 // time, and which of those six numbers caused it cannot be seen from outside.
 //
+// Command 0x1D is the answer to a tile request: one block of one tile.  A tile
+// is 64 KiB and a frame is at most 2047 bytes, so a tile arrives as a run of
+// blocks, each of them eight-byte aligned, which is what lets the write port
+// take whole words and never a lane mask.  The payload, all little-endian:
+//
+//     u8  level        which level's tile grid
+//     u16 tx, ty       the tile, fifteen bits each in sixteen
+//     u16 offset       byte offset inside the tile, a multiple of eight
+//     u16 count        bytes in this block, nonzero and a multiple of eight
+//     count bytes      the tile's own bytes, in storage order
+//     u32 crc          CRC-32 over every byte above, complemented
+//
+// Answered ACK, or NAK 'D' -- the CRC, a misaligned or zero count, a misaligned
+// offset, or a block that would run past the end of the tile.  The bytes are
+// written as they arrive, so a rejected block has already been written and the
+// host re-sends it, which is idempotent; what a rejection does *not* do is make
+// the tile resident.  The page table is told a tile has landed only when the
+// block that ends it has passed its CRC and every write it caused has been
+// acknowledged, because a tile that is marked resident while half of it is still
+// in flight is a hit on somebody else's picture.
+//
+// The slot is not the host's to choose: it presents coordinates and this module
+// adds them to the address the page table derives, so the cache's replacement
+// policy stays in the cache.
+//
 // The write port is ahb_sdram's A25 side: req, address, lanes and data held
 // steady until ack pulses.  Bytes are assembled little-endian into a 64-bit
 // word and issued with all eight lanes; a short tail goes out with only the
@@ -83,6 +108,12 @@
 module maps_link_rx #(
     parameter [31:0] MAGIC       = 32'h314c_4d54,   // 'TML1'
     parameter int    BLOCK_BYTES = 8192,
+    parameter int    TBYTES      = 65536,          // bytes in a pool tile
+    // Whether command 0x1D is accepted at all.  Off in the top until the pool
+    // has a home: the pack occupies 27.62 MiB of the dock's 32 and the pool's
+    // base is inside it, so a tile written now would land on the picture.  The
+    // testbench turns it on; the top turns it on with the page table.
+    parameter bit    TILES       = 1'b0,
     // Idle frame-parser cycles before the transfer is abandoned.  2^20 at
     // 21.49 MHz is about 49 ms, generous against a 2 Mbaud link's 5 us a byte.
     parameter int    TIMEOUT     = 20
@@ -110,6 +141,13 @@ module maps_link_rx #(
     output reg         pal_we,
     output reg  [7:0]  pal_idx,
     output reg  [23:0] pal_data,
+
+    // tile blocks: the pool is filled here, at the slot the page table chose
+    output reg  [1:0]  fill_level,
+    output reg  [14:0] fill_tx,
+    output reg  [14:0] fill_ty,
+    input  wire [24:0] fill_addr,      // where those coordinates' bytes belong
+    output reg         fill_commit,    // this tile's last block is in the pool
 
     // viewport, latched only when the command's own guard accepts it
     output reg         vp_we,
@@ -195,6 +233,41 @@ reg  [7:0]  pal_r, pal_g;
 reg  [31:0] pal_crc;                // running CRC over start, count and entries
 reg  [31:0] pal_rx;                 // the CRC as it arrives
 reg  [31:0] palettes;
+
+// ------------------------------------------------------------------ tiles ----
+// Command 0x1D.  Nine header bytes, then the block, then four CRC bytes.  The
+// header is checked before the data is taken: a block that is not whole words,
+// or that would run past the end of the tile, is refused while its payload is
+// still arriving, which is what the image loader does with a bad header too.
+localparam [3:0] T_IDLE = 4'd0, T_LEVEL = 4'd1, T_TX_LO = 4'd2, T_TX_HI = 4'd3,
+                 T_TY_LO = 4'd4, T_TY_HI = 4'd5, T_OFF_LO = 4'd6, T_OFF_HI = 4'd7,
+                 T_CNT_LO = 4'd8, T_CNT_HI = 4'd9, T_DATA = 4'd10,
+                 T_CRC = 4'd11, T_FIN = 4'd12;
+
+reg  [3:0]  ts;
+reg         tile_valid;
+reg  [7:0]  tile_byte;
+reg  [1:0]  t_level;
+reg  [14:0] t_tx, t_ty;
+reg  [15:0] t_off, t_count, t_left;
+reg  [2:0]  t_wc;                   // bytes gathered into the current word
+reg  [2:0]  t_b;                    // byte within the CRC
+reg  [31:0] t_crc;                  // running CRC over the header and the data
+reg  [31:0] t_rx;                   // the CRC as it arrives
+reg  [63:0] t_wbuf;
+reg  [24:0] t_addr;
+reg         t_last;                 // this block ends the tile
+reg         t_commit_pending;
+reg         t_ovf;                  // a word was lost to a busy write port
+reg  [31:0] tiles;
+
+// the block's count as it is being received, the last header byte included
+wire [15:0] t_cnt_n = {tile_byte, t_count[7:0]};
+localparam [16:0] TB_MAX = TBYTES;
+
+function automatic [16:0] blk_end(input [15:0] off, input [15:0] cnt);
+    blk_end = {1'b0, off} + {1'b0, cnt};
+endfunction
 
 // ---------------------------------------------------------------- status ----
 reg        ss_active;
@@ -335,6 +408,14 @@ always @(posedge clk or negedge resetn) begin
         pal_b <= 2'd0; pal_r <= 8'd0; pal_g <= 8'd0;
         pal_crc <= 32'hFFFFFFFF; pal_rx <= 32'd0; palettes <= 32'd0;
         pal_we <= 1'b0; pal_idx <= 8'd0; pal_data <= 24'd0;
+        ts <= T_IDLE; tile_valid <= 1'b0; tile_byte <= 8'd0;
+        t_level <= 2'd0; t_tx <= 15'd0; t_ty <= 15'd0;
+        t_off <= 16'd0; t_count <= 16'd0; t_left <= 16'd0;
+        t_wc <= 3'd0; t_b <= 3'd0; t_crc <= 32'hFFFFFFFF; t_rx <= 32'd0;
+        t_wbuf <= 64'd0; t_addr <= 25'd0; t_last <= 1'b0;
+        t_commit_pending <= 1'b0; t_ovf <= 1'b0; tiles <= 32'd0;
+        fill_level <= 2'd0; fill_tx <= 15'd0; fill_ty <= 15'd0;
+        fill_commit <= 1'b0;
         vs <= V_IDLE; vp_valid <= 1'b0; vp_byte <= 8'd0; vb <= 5'd0;
         vw <= 32'd0; v_base <= 32'd0; v_wh <= 32'd0; v_step <= 32'd0;
         v_x0 <= 32'd0; v_y0 <= 32'd0; v_crc <= 32'hFFFFFFFF; v_rx <= 32'd0;
@@ -371,6 +452,8 @@ always @(posedge clk or negedge resetn) begin
     end else begin
         pl_valid <= 1'b0;
         pal_valid <= 1'b0;
+        tile_valid <= 1'b0;
+        fill_commit <= 1'b0;
         pal_we <= 1'b0;
         vp_valid <= 1'b0;
         vp_we <= 1'b0;
@@ -406,6 +489,13 @@ always @(posedge clk or negedge resetn) begin
                             end
                             if (rx_data == 8'h16) is <= I_MOUSE;
                             if (rx_data == 8'h17) is <= I_KEY;
+                            if (rx_data == 8'h1D && TILES) begin
+                                ts      <= T_LEVEL;
+                                t_crc   <= 32'hFFFFFFFF;
+                                t_ovf   <= 1'b0;
+                                t_wc    <= 3'd0;
+                                t_wbuf  <= 64'd0;
+                            end
                             if (rx_data == 8'h16 || rx_data == 8'h17) in_cnt <= 3'd0;
                             if (rx_data == 8'h0A) begin
                                 vs <= V_BODY;
@@ -438,6 +528,9 @@ always @(posedge clk or negedge resetn) begin
                             end else if (fcmd == 8'h16 || fcmd == 8'h17) begin
                                 in_en   <= 1'b1;
                                 in_byte <= rx_data;
+                            end else if (fcmd == 8'h1D && TILES) begin
+                                tile_valid <= 1'b1;
+                                tile_byte  <= rx_data;
                             end
                             if (fleft == 12'd1) fs <= F_IDLE;
                             else fleft <= fleft - 12'd1;
@@ -522,6 +615,143 @@ always @(posedge clk or negedge resetn) begin
                 end
                 default: ps <= P_IDLE;
             endcase
+        end
+
+        // ---------------------------------------------------------- tiles --
+        // Command 0x1D, one block of one tile.  The header is checked before a
+        // byte of it is written, and the write goes to the slot the page table
+        // derives from the coordinates -- the host never names an address.
+        if (tile_valid) begin
+            case (ts)
+                T_LEVEL: begin
+                    fill_level <= tile_byte[1:0];
+                    t_crc      <= crc32_byte(t_crc, tile_byte);
+                    ts         <= T_TX_LO;
+                end
+                T_TX_LO: begin
+                    t_tx[7:0] <= tile_byte;
+                    t_crc     <= crc32_byte(t_crc, tile_byte);
+                    ts        <= T_TX_HI;
+                end
+                T_TX_HI: begin
+                    t_tx[14:8] <= tile_byte[6:0];
+                    fill_tx    <= {tile_byte[6:0], t_tx[7:0]};
+                    t_crc      <= crc32_byte(t_crc, tile_byte);
+                    ts         <= T_TY_LO;
+                end
+                T_TY_LO: begin
+                    t_ty[7:0] <= tile_byte;
+                    t_crc     <= crc32_byte(t_crc, tile_byte);
+                    ts        <= T_TY_HI;
+                end
+                T_TY_HI: begin
+                    t_ty[14:8] <= tile_byte[6:0];
+                    fill_ty    <= {tile_byte[6:0], t_ty[7:0]};
+                    t_crc      <= crc32_byte(t_crc, tile_byte);
+                    ts         <= T_OFF_LO;
+                end
+                T_OFF_LO: begin
+                    t_off[7:0] <= tile_byte;
+                    t_crc      <= crc32_byte(t_crc, tile_byte);
+                    ts         <= T_OFF_HI;
+                end
+                T_OFF_HI: begin
+                    t_off[15:8] <= tile_byte;
+                    t_crc       <= crc32_byte(t_crc, tile_byte);
+                    ts          <= T_CNT_LO;
+                end
+                T_CNT_LO: begin
+                    t_count[7:0] <= tile_byte;
+                    t_crc        <= crc32_byte(t_crc, tile_byte);
+                    ts           <= T_CNT_HI;
+                end
+                // the last header byte decides the whole block: whole words,
+                // inside the tile, and something to write
+                T_CNT_HI: begin
+                    t_crc <= crc32_byte(t_crc, tile_byte);
+                    if (t_cnt_n == 16'd0 || t_cnt_n[2:0] != 3'd0 ||
+                        t_off[2:0] != 3'd0 ||
+                        blk_end(t_off, t_cnt_n) > TB_MAX) begin
+                        last_nak <= "D";
+                        tx_b0 <= NAK; tx_b1 <= "D"; tx_two <= 1'b1;
+                        tx_step <= 2'd0; tx_i <= 1'b0;
+                        after_tx <= S_MAGIC; st <= S_TX;
+                        ts <= T_IDLE;
+                    end else begin
+                        t_left  <= t_cnt_n;
+                        t_addr  <= fill_addr + {9'd0, t_off};
+                        t_last  <= (blk_end(t_off, t_cnt_n) == TB_MAX);
+                        t_wc    <= 3'd0;
+                        t_wbuf  <= 64'd0;
+                        ts      <= T_DATA;
+                    end
+                end
+                // eight bytes make a word, and every word is whole: the block's
+                // offset and count are both multiples of eight, so there is no
+                // lane mask and no tail
+                T_DATA: begin
+                    t_crc  <= crc32_byte(t_crc, tile_byte);
+                    t_wbuf <= {tile_byte, t_wbuf[63:8]};
+                    t_left <= t_left - 16'd1;
+                    if (t_wc == 3'd7) begin
+                        t_wc <= 3'd0;
+                        t_addr <= t_addr + 25'd8;
+                        if (wr_pending || tail_pending) begin
+                            // the port is still busy: this word is lost, so the
+                            // block cannot be committed.  The host re-sends it
+                            t_ovf <= 1'b1;
+                            overflows <= overflows + 16'd1;
+                        end else begin
+                            wr_req     <= 1'b1;
+                            wr_addr    <= t_addr[24:3];
+                            wr_lanes   <= 8'hFF;
+                            wr_wdata   <= {tile_byte, t_wbuf[63:8]};
+                            wr_pending <= 1'b1;
+                        end
+                    end else begin
+                        t_wc <= t_wc + 3'd1;
+                    end
+                    if (t_left == 16'd1) begin
+                        t_b  <= 3'd0;
+                        t_rx <= 32'd0;
+                        ts   <= T_CRC;
+                    end
+                end
+                T_CRC: begin
+                    t_rx[8*t_b +: 8] <= tile_byte;
+                    if (t_b == 3'd3) begin
+                        if (~t_crc == {tile_byte, t_rx[23:0]} && !t_ovf) begin
+                            t_commit_pending <= t_last;
+                            ts <= T_FIN;
+                        end else begin
+                            last_nak <= "D";
+                            tx_b0 <= NAK; tx_b1 <= "D"; tx_two <= 1'b1;
+                            tx_step <= 2'd0; tx_i <= 1'b0;
+                            after_tx <= S_MAGIC; st <= S_TX;
+                            ts <= T_IDLE;
+                        end
+                    end else begin
+                        t_b <= t_b + 3'd1;
+                    end
+                end
+                default: ts <= T_IDLE;
+            endcase
+        end
+
+        // The finish is a wait, not a byte: the last byte of the block has
+        // already gone by the time it is entered, so it cannot live inside the
+        // per-byte guard above or nothing would ever run it.  Nothing is
+        // answered, and no tile is made resident, until every write this block
+        // caused has been acknowledged -- a tile marked resident while half of
+        // it is still in the port is a hit on somebody else's picture.
+        if (ts == T_FIN && !wr_pending && !tail_pending) begin
+            fill_commit <= t_commit_pending;
+            if (t_commit_pending) tiles <= tiles + 32'd1;
+            t_commit_pending <= 1'b0;
+            tx_b0 <= ACK; tx_b1 <= 8'd0; tx_two <= 1'b0;
+            tx_step <= 2'd0; tx_i <= 1'b0;
+            after_tx <= S_MAGIC; st <= S_TX;
+            ts <= T_IDLE;
         end
 
         // --------------------------------------------------------- status ----

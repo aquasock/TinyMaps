@@ -1150,3 +1150,43 @@ The reply, which is the other half of the cycle: a command that carries a tile's
 - User Test: N/A
 
 ---
+
+## 34 COMMIT Unreleased 2026-10-27T01:03:44-07:00
+
+#### Coming From:
+
+Unreleased 6f612ad
+
+#### Purpose:
+
+Write the other half of the tile protocol -- the host's answer arriving as blocks that land in the pool and make a tile resident only when it is whole.
+
+#### Outcome:
+
+`fpga/tinymaps/maps_link_rx.sv` gained command `0x1D`, one block of one tile: nine header bytes of level, coordinates, offset and count, then the block, then a CRC-32, all little-endian, answered ACK or NAK `'D'`. The header is judged before a byte is written -- a zero or misaligned count, a misaligned offset, or a block that would run past the end of the tile is refused while its payload is still arriving -- and the write goes to the address the page table derives from the coordinates plus the offset, so the host never names a destination and the cache's replacement policy stays in the cache. `fpga/tinymaps/maps_tiles.sv` changed shape for it: filling was one event and is now two, because the loader needs the address before the bytes exist and must not make the tile resident until they are all in. `fill_addr` is a function of the coordinates and needs no state; `fill_commit` is the event that sets the tag and the valid bit. Marking a tile resident when the address was handed out would make a half-written tile a hit, which is the same failure as a garbage tag: a hit on somebody else's picture. A block is acknowledged, and a tile committed, only after the last write it caused has been taken by the port, and a block that lost a word to a busy port is refused rather than committed with a hole in it. Two bugs were found by the testbench rather than by reading. The finish state was written inside the per-byte guard, so it needed a byte to advance and the last byte of the block had already gone by -- nothing was ever acknowledged or committed, which is exactly the shape of "it wrote the data but said nothing". And the test that checks a refused block writes nothing was looking at a slot an earlier corrupt block had already written, which is the documented behaviour for a bad CRC: the bytes land and the tile is not made resident. `sim/tb_maps_link_rx.sv` now sends real blocks through the real frame parser and checks where they landed, that a middle block does not commit, that the block which ends the tile commits once with its own coordinates, that a corrupt block commits nothing, and that a misaligned block writes nothing. The request frame from the previous cycle was corrected to little-endian while the format had no implementation to break, and its testbench now decodes the corrected order. Seventeen of seventeen testbenches pass including `check_render` and `check_tmds`, and the eight-seed sweep closes timing from 82.28 to 87.86 MHz against 74.25, with seed 1 at 86.89. The tile command is behind a `TILES` parameter that `tinymaps_top` leaves off, because the pack occupies 27.62 MiB of the dock's 32 and the pool's base is inside it: a tile written today would land on the picture. So the bitstream behaves exactly as the one on the board and nothing was deployed. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Give the pool a home and put the page table in the top: reserve the part of the SDRAM the pack will give up, or shrink the pack, so `POOL_BASE` is not inside it, then instantiate `maps_tiles` with the loader's fill ports and turn `TILES` on -- at that point a tile the host sends is resident and the sequencer can hit it. After that the renderer's miss has to reach `maps_tile_req` and the coarse-level fallback has to draw something while the tile is on its way, which is what makes the renderer's not retrying a missed row harmless.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/maps_tile_req.sv
+- fpga/tinymaps/maps_tiles.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_link_rx.sv
+- sim/tb_maps_render_tiled.sv
+- sim/tb_maps_tile_req.sv
+- sim/tb_maps_tiles.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

@@ -11,10 +11,11 @@
 //     0xAA  length high  length low  command  payload ...
 //
 // with a command of `CMD` (0x1C by default) and a five-byte payload: the level,
-// then the tile's x and y, each as a big-endian pair, fifteen bits in sixteen.
-// The length counts the command and the payload together, so it is six.
+// then the tile's x and y, fifteen bits each in sixteen and little-endian like
+// every other payload in this protocol -- only the frame's own length is
+// big-endian.  The length counts the command and the payload, so it is six.
 //
-//     AA 00 06 1C L TXH TXL TYH TYL
+//     AA 00 06 1C L TXL TXH TYL TYH
 //
 // Nothing is answered.  The reply is the tile's bytes arriving as their own
 // command, and a request that is never answered is asked again the next time a
@@ -100,10 +101,10 @@ function automatic [7:0] frame_byte(input [3:0] idx, input [1:0] lvl,
         4'd2:    frame_byte = 8'd6;                  // length low: command + five
         4'd3:    frame_byte = CMD;
         4'd4:    frame_byte = {6'd0, lvl};
-        4'd5:    frame_byte = {1'b0, tx[14:8]};
-        4'd6:    frame_byte = tx[7:0];
-        4'd7:    frame_byte = {1'b0, ty[14:8]};
-        default: frame_byte = ty[7:0];
+        4'd5:    frame_byte = tx[7:0];
+        4'd6:    frame_byte = {1'b0, tx[14:8]};
+        4'd7:    frame_byte = ty[7:0];
+        default: frame_byte = {1'b0, ty[14:8]};
     endcase
 endfunction
 

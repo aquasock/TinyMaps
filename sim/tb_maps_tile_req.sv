@@ -77,7 +77,7 @@ begin
 end
 endtask
 
-// a frame is AA 00 06 CMD level txh txl tyh tyl
+// a frame is AA 00 06 CMD level txl txh tyl tyh, little-endian
 task automatic want_frame(input integer at, input [1:0] lvl,
                           input [14:0] tx, input [14:0] ty, input [255:0] what);
 begin
@@ -87,8 +87,8 @@ begin
     end else if (cap[at]   !== 8'hAA || cap[at+1] !== 8'h00 ||
                  cap[at+2] !== 8'd6  || cap[at+3] !== CMD  ||
                  cap[at+4] !== {6'd0, lvl}     ||
-                 cap[at+5] !== {1'b0, tx[14:8]} || cap[at+6] !== tx[7:0] ||
-                 cap[at+7] !== {1'b0, ty[14:8]} || cap[at+8] !== ty[7:0]) begin
+                 cap[at+5] !== tx[7:0] || cap[at+6] !== {1'b0, tx[14:8]} ||
+                 cap[at+7] !== ty[7:0] || cap[at+8] !== {1'b0, ty[14:8]}) begin
         $display("  %0s: got %02h %02h %02h %02h %02h %02h %02h %02h %02h",
                  what, cap[at], cap[at+1], cap[at+2], cap[at+3], cap[at+4],
                  cap[at+5], cap[at+6], cap[at+7], cap[at+8]);

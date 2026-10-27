@@ -35,6 +35,36 @@ wire [31:0] images, bytes_written;
 wire [7:0]  last_nak;
 wire [15:0] overflows, timeouts;
 
+// ------------------------------------------------------------ the pool -----
+// The page table is not in this bench; what it does for the loader is answer
+// "where do these coordinates' bytes belong", so the bench answers with a
+// formula the checks can repeat.  The pool sits at 1.5 MiB, clear of the image
+// loads above.
+localparam [24:0] TB_POOL = 25'h0018_0000;
+wire [1:0]  fill_level;
+wire [14:0] fill_tx, fill_ty;
+wire        fill_commit;
+wire [4:0]  tb_slot = {2'd0, fill_tx[2:0]} ^ {2'd0, fill_ty[2:0]};
+wire [24:0] fill_addr = TB_POOL + ({20'd0, tb_slot} << 16);
+
+reg         commit_seen = 0;
+reg  [1:0]  c_level = 2'd0;
+reg  [14:0] c_tx = 15'd0, c_ty = 15'd0;
+integer     commits = 0;
+always @(posedge clk)
+    if (fill_commit) begin
+        commit_seen <= 1'b1;
+        c_level <= fill_level;
+        c_tx    <= fill_tx;
+        c_ty    <= fill_ty;
+        commits <= commits + 1;
+    end
+
+// the byte a tile holds at an offset, so the check and the sender agree
+function automatic [7:0] tile_byte_at(input integer a);
+    tile_byte_at = (a * 13 + 5) & 8'hFF;
+endfunction
+
 // ------------------------------------------------------------ write model --
 reg [7:0] mem [0:MEM_BYTES-1];
 reg       req_seen = 0;
@@ -76,12 +106,14 @@ always @(posedge clk) begin
     end
 end
 
-maps_link_rx dut (
+maps_link_rx #(.TILES(1'b1)) dut (
     .clk(clk), .resetn(resetn),
     .rx_data(rx_data), .rx_valid(rx_valid),
     .tx_start(tx_start), .tx_data(tx_data), .tx_busy(tx_busy),
     .wr_req(wr_req), .wr_addr(wr_addr), .wr_lanes(wr_lanes),
     .wr_wdata(wr_wdata), .wr_ack(wr_ack),
+    .fill_level(fill_level), .fill_tx(fill_tx), .fill_ty(fill_ty),
+    .fill_addr(fill_addr), .fill_commit(fill_commit),
     .busy(busy), .images(images), .bytes_written(bytes_written),
     .last_nak(last_nak), .overflows(overflows), .timeouts(timeouts)
 );
@@ -119,6 +151,40 @@ task send_frame(input integer off, input integer len);
         send_byte(flen & 8'hFF);
         send_byte(8'h07);
         for (k = 0; k < len; k = k + 1) send_byte(txbuf[off + k]);
+    end
+endtask
+
+// the same frame with any command, for the commands that are not the loader
+task send_cmd(input [7:0] cmd, input integer off, input integer len);
+    integer k; integer flen;
+    begin
+        flen = 1 + len;
+        send_byte(8'hAA);
+        send_byte(flen >> 8);
+        send_byte(flen & 8'hFF);
+        send_byte(cmd);
+        for (k = 0; k < len; k = k + 1) send_byte(txbuf[off + k]);
+    end
+endtask
+
+// one 0x1D tile block: the nine header bytes, the data, the CRC
+task send_tile(input [1:0] lvl, input [14:0] tx, input [14:0] ty,
+               input integer off, input integer cnt, input corrupt);
+    integer k; reg [31:0] c;
+    begin
+        txbuf[0] = {6'd0, lvl};
+        txbuf[1] = tx[7:0];   txbuf[2] = {1'b0, tx[14:8]};
+        txbuf[3] = ty[7:0];   txbuf[4] = {1'b0, ty[14:8]};
+        txbuf[5] = off[7:0];  txbuf[6] = off[15:8];
+        txbuf[7] = cnt[7:0];  txbuf[8] = cnt[15:8];
+        for (k = 0; k < cnt; k = k + 1) txbuf[9 + k] = tile_byte_at(off + k);
+        c = 32'hFFFFFFFF;
+        for (k = 0; k < 9 + cnt; k = k + 1) c = crc32_byte(c, txbuf[k]);
+        c = ~c;
+        if (corrupt) c = c ^ 32'h0000_0001;
+        txbuf[9+cnt+0] = c[7:0];  txbuf[9+cnt+1] = c[15:8];
+        txbuf[9+cnt+2] = c[23:16]; txbuf[9+cnt+3] = c[31:24];
+        send_cmd(8'h1D, 0, 9 + cnt + 4);
     end
 endtask
 
@@ -275,6 +341,51 @@ initial begin
 
     if (overflows !== 0) begin $display("FAIL: %0d write-port overflows", overflows); errors = errors + 1; end
     else $display("PASS: no write-port overflows");
+
+    // 5. a tile block lands at the slot the table named, not at an address the
+    //    host picked, and answers ACK
+    $display("--- test 5: a tile block is written into the pool");
+    bad = 0;
+    send_tile(2'd1, 15'd5, 15'd2, 0, 1024, 1'b0);
+    expect_byte(8'h06, "tile block ACK");
+    for (n = 0; n < 1024; n = n + 1)
+        if (mem[TB_POOL + (5'd5 ^ 5'd2) * 65536 + n] !== tile_byte_at(n)) bad = bad + 1;
+    if (bad != 0) begin $display("FAIL: %0d of 1024 tile bytes wrong", bad); errors = errors + 1; end
+    else $display("PASS: 1024 tile bytes landed in the pool at the slot's address");
+    if (commits != 0) begin $display("FAIL: a middle block committed the tile"); errors = errors + 1; end
+    else $display("PASS: a middle block does not make the tile resident");
+
+    // 6. the block that ends the tile commits it, with the right coordinates
+    $display("--- test 6: the last block commits the tile");
+    bad = 0;
+    send_tile(2'd1, 15'd5, 15'd2, 64512, 1024, 1'b0);
+    expect_byte(8'h06, "last block ACK");
+    for (n = 0; n < 1024; n = n + 1)
+        if (mem[TB_POOL + (5'd5 ^ 5'd2) * 65536 + 64512 + n] !== tile_byte_at(64512 + n)) bad = bad + 1;
+    if (bad != 0) begin $display("FAIL: %0d of the last block's bytes wrong", bad); errors = errors + 1; end
+    else $display("PASS: the tile's last block landed");
+    if (commits != 1 || c_level !== 2'd1 || c_tx !== 15'd5 || c_ty !== 15'd2) begin
+        $display("FAIL: commit %0d level %0d tx %0d ty %0d", commits, c_level, c_tx, c_ty);
+        errors = errors + 1;
+    end else $display("PASS: the tile was committed once, with its own coordinates");
+
+    // 7. a block whose CRC is wrong is refused and commits nothing
+    $display("--- test 7: a corrupt tile block is refused");
+    send_tile(2'd2, 15'd1, 15'd1, 0, 1024, 1'b1);
+    expect_byte(8'h15, "tile block NAK");
+    expect_byte("D", "tile block NAK letter");
+    if (commits != 1) begin $display("FAIL: a refused block committed a tile"); errors = errors + 1; end
+    else $display("PASS: a refused block commits nothing");
+
+    // 8. a block that is not whole words is refused before it is written
+    $display("--- test 8: a misaligned block is refused");
+    send_tile(2'd0, 15'd1, 15'd2, 0, 1020, 1'b0);
+    expect_byte(8'h15, "misaligned NAK");
+    expect_byte("D", "misaligned NAK letter");
+    if (mem[TB_POOL + (5'd1 ^ 5'd2) * 65536] !== 8'h00) begin
+        $display("FAIL: a refused block wrote to the pool");
+        errors = errors + 1;
+    end else $display("PASS: a refused block writes nothing");
 
     repeat (50) @(posedge clk);
     if (errors == 0) $display("\nRESULT: PASS");

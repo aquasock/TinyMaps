@@ -231,12 +231,33 @@ testbench than from a rebuilt renderer.
   decodes every byte back into a frame: dedupe, ordering, a queue that fills and
   drops with a sticky flag, a loader that holds the line, and a loader that asks
   mid-frame and does not get it.
-- **Next: the reply**, which is the other half of item 4 and is not written.  A
-  frame cannot exceed 2047 bytes, so a 32 KiB tile has to arrive in blocks; the
-  slot address is the page table's business and must not be something the host
-  has to know, and the table is told a tile landed only when its last block has.
-  Then prefetch, eviction and the coarse fallback on a miss (which is what makes
-  that no-retry behaviour harmless), then 4bpp in the pixel path.
+- **Done: the reply** -- command `0x1D`, one block of one tile, handled by
+  `maps_link_rx` next to the image and palette commands.  Nine header bytes, the
+  block, four CRC bytes; little-endian throughout.  The write goes to the address
+  the page table derives from the coordinates, so the host never learns the slot
+  and the cache's replacement policy stays in the cache.  Filling is now two
+  things instead of one: `fill_addr` is a function of the coordinates and is
+  available before the bytes exist, and `fill_commit` is the event that makes a
+  tile resident -- marking it resident when the address was handed out would make
+  a half-written tile a hit, which is a hit on somebody else's picture.  A block
+  is refused with NAK `'D'` for a bad CRC, a zero or misaligned count, a
+  misaligned offset, or a block that would run past the end of the tile; its bytes
+  have already been written, and re-sending is idempotent, but nothing is
+  committed and nothing is acknowledged until every write the block caused has
+  been taken by the port.  `sim/tb_maps_link_rx.sv` sends real blocks through the
+  real frame parser and checks where the bytes landed, that a middle block does
+  not make a tile resident, that the block which ends the tile commits it once
+  with its own coordinates, that a corrupt block commits nothing, and that a
+  refused block writes nothing.
+- **Note: the tile command is off in the top.** `maps_link_rx`'s `TILES`
+  parameter defaults to 0 and `tinymaps_top` leaves it there, because the pack
+  occupies 27.62 MiB of the dock's 32 and the pool's base is inside it: a tile
+  written today would land on the picture.  The testbench turns it on.  It goes on
+  in the top with the page table and the pool's reservation, which is the next
+  piece.
+- **Next: the pool's home and the page table in the top**, then prefetch,
+  eviction and the coarse fallback on a miss (which is what makes that no-retry
+  behaviour harmless), then 4bpp in the pixel path.
 
 **A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
 At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the
@@ -252,17 +273,38 @@ parser covers both directions: `0xAA`, a big-endian length, a command, then the
 payload.  The command is `0x1C` and the length counts the command with the
 payload, so it is six:
 
-    AA 00 06 1C L TXH TXL TYH TYL
+    AA 00 06 1C L TXL TXH TYL TYH
 
 `L` is the level, 0 to 3 as the level table orders them, finest first.  `TX` and
-`TY` are the tile's coordinates in the level's own tile grid as fifteen bits in a
-sixteen-bit big-endian pair.  Nothing is answered with an acknowledgement: the
-reply is the tile's bytes, and a tile that never arrives is asked for again the
-next time a line needs it.
+`TY` are the tile's coordinates in the level's own tile grid, fifteen bits each
+in a sixteen-bit little-endian pair -- the payloads are little-endian throughout
+this protocol; only the frame's own length is big-endian.  Nothing is answered
+with an acknowledgement: the reply is the tile's bytes, and a tile that never
+arrives is asked for again the next time a line needs it.
 
 A frame cannot be longer than 2047 bytes -- the receiver's length field is eleven
-bits plus a guard -- so a 32 KiB tile cannot be one frame.  That constrains the
-reply, not the request.
+bits plus a guard -- so a 32 KiB tile cannot be one frame.  That is why the reply
+is a run of blocks.
+
+## The reply: one block of one tile
+
+Command `0x1D`, little-endian, answered ACK or NAK `'D'`:
+
+    u8  level        which level's tile grid
+    u16 tx, ty       the tile, fifteen bits each in sixteen
+    u16 offset       byte offset inside the tile, a multiple of eight
+    u16 count        bytes in this block, nonzero and a multiple of eight
+    count bytes      the tile's own bytes, in storage order
+    u32 crc          CRC-32 over every byte above, complemented
+
+Whole words and no tail is a deliberate constraint: it is what lets the pool be
+written through the same port the image loader uses without a lane mask, and it
+costs the host nothing, since a tile's size is a multiple of eight and the host
+chooses the block size.  1024-byte blocks are what the core has been tested with,
+which is 64 blocks for a 64 KiB 8bpp tile.
+
+The core adds `offset` to the address the page table derives from the
+coordinates.  The host sends coordinates, never a destination.
 
 ## Implementation order
 

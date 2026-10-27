@@ -362,6 +362,12 @@ maps_link_rx u_loader (
     .wr_req(ld_req), .wr_addr(ld_addr), .wr_lanes(ld_lanes),
     .wr_wdata(ld_wdata), .wr_ack(sd_ack),
     .pal_we(ld_pal_we), .pal_idx(ld_pal_idx), .pal_data(ld_pal_data),
+    // The tile pool has no home yet: the pack occupies 27.62 MiB of the dock's
+    // 32 and the pool's base is inside it, so command 0x1D stays off here
+    // (TILES defaults to 0) and this address is never used.  It is tied rather
+    // than left open because an open input on a path that writes memory is not
+    // something to leave to a synthesis warning.
+    .fill_addr(25'd0),
     .vp_we(vp_we), .vp_base(vp_base), .vp_w(vp_w), .vp_h(vp_h),
     .vp_step(vp_step), .vp_x0(vp_x0), .vp_y0(vp_y0),
     .st_base(LEVEL_BASE), .st_w(LEVEL_W), .st_h(LEVEL_H), .st_step(STEP),

@@ -189,6 +189,16 @@ destination being an SDRAM byte address:
 Answered ACK 0x06 or NAK 0x15 then a letter: 'H' header CRC, 'C' block CRC,
 'I' image CRC, 'T' timeout. A NAKed block is re-sent from its own address.
 
+Command `0x1D` is the tile reply: one block of one tile, nine header bytes
+(`u8 level`, `u16 tx`, `u16 ty`, `u16 offset`, `u16 count`, all little-endian),
+then `count` bytes and a CRC-32, answered ACK or NAK `'D'`. `offset` and `count`
+must be multiples of eight, which is what lets the pool be written in whole words
+through the same port; the destination is the address the page table derives from
+the coordinates plus `offset`, never an address the host names. The table is told
+the tile is resident only when the block that ends it passes its CRC and the port
+has drained. It is behind the `TILES` parameter, which the top leaves off until
+the pool has a home -- the pack occupies 27.62 MiB of the dock's 32.
+
 The receiver parses the link's frames itself -- `0xAA len_hi len_lo cmd
 payload`, the length big-endian counting the command byte and below 2048 -- and
 takes the payload of command `0x07`. `maps_uart_rx` and `maps_uart_tx` carry the
