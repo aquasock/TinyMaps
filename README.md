@@ -19,11 +19,14 @@ Panning and zooming work, and `tools/read_status.py` reports the viewport the
 renderer is being given -- which is how the level-table defects that froze the
 picture into one repeated row were found.
 
-**The mouse drives a cursor**, drawn over the picture as a sixteen-pixel marker:
-a green frame while no button is down and a red crosshair while one is, which is
-TinyCreature's own scheme, changed on the button state rather than on movement.
-Motion moves the marker always but moves the land **only while the left button
-is held**, so the left button is a hand that takes the map and lets it go. The
+**The mouse drives a cursor**, drawn over the picture as a thirty-two-pixel
+marker: a green frame while no button is down and a red crosshair while one is,
+which is TinyCreature's own scheme, changed on the button state rather than on
+movement. Motion moves the marker always but moves the land **only while the
+left button is held**, so the left button is a hand that takes the map and lets
+it go -- and it pulls the land the way the cursor goes, so dragging right sends
+the picture right. A keyboard pan keeps the opposite mapping, since the arrows
+move the view toward the arrow and a key press is not a hand. The
 wheel zooms about the marker rather than about the middle of the screen: the
 origin shift is the cursor's coordinates times the change in step, so the land
 under the marker stays under it. `maps_link_rx` had been latching the mouse's

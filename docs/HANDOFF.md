@@ -124,7 +124,21 @@
   emit that needed it, which put the next line into the blocking path too and
   cascaded for four lines -- the frame-top corruption.  The user reports pan and
   zoom work; the frame top has not been confirmed separately.
-- **Added this cycle - the cursor, the hand and zoom about the cursor.**  The
+- **Added this cycle - the marker doubled and the hand pulls the right way.**
+  Two corrections the user asked for after driving the first cursor build: the
+  marker is thirty-two pixels instead of sixteen, with a four-pixel frame and a
+  four-pixel crosshair so the proportions are unchanged, and a mouse drag now
+  *pulls* the land the way the cursor goes rather than sending it the other way.
+  The inversion is only in the drag: a keyboard pan still adds its report,
+  because the arrows move the view toward the arrow and a key press is not a
+  hand.  Both were cheap and neither moved the timing much -- the eight-seed
+  sweep gives seven of eight passing at 78.44 to 82.41 MHz, one more than the
+  previous build, and the shipped seed 1 at 82.41 MHz is
+  `tinymaps.e8242e81daf7.bin`.  Two of the pan tests had to move their starting
+  origin to mid-level, because a rightward drag now walks the origin *down* and
+  a test starting at zero was clamping instead of panning; a new test pins the
+  keyboard's own direction so the two mappings cannot drift together.
+- **Added last cycle - the cursor, the hand and zoom about the cursor.**  The
   mouse now drives a marker drawn over the picture: a green frame with no button
   down and a red crosshair while one is, taken from TinyCreature's scheme
   (`docs` there: a 16x16 green frame idle and a red crosshair held, changed on

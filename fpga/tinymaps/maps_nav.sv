@@ -227,10 +227,19 @@ always @(posedge clk) begin
                 ny0   <= cur_y0;
                 ct    <= 5'd16;
                 c_level <= lvl;
-                // the hand takes the land only while the left button is held
-                if (!ev_mouse || ev_btn[0]) begin
+                // The hand takes the land only while the left button is held,
+                // and it pulls the land the way the cursor goes: dragging right
+                // moves the picture right, which walks the viewport's origin
+                // left, so the report is subtracted.  A keyboard pan is not a
+                // hand -- the arrows move the view toward the arrow -- so it
+                // keeps the addition.
+                if (!ev_mouse) begin
                     acc_x <= acc_x + ev_px;
                     acc_y <= acc_y + ev_py;
+                    ns <= N_PAN;
+                end else if (ev_btn[0]) begin
+                    acc_x <= acc_x - ev_px;
+                    acc_y <= acc_y - ev_py;
                     ns <= N_PAN;
                 end else begin
                     ns <= N_ZOOM;

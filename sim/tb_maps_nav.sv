@@ -113,19 +113,28 @@ initial begin
 
     // the finest level at 1:1, so there is room to pan in every direction
     cur_base = lv_base0; cur_w = 4608; cur_h = 4608; cur_step = 32'd65536;
-    cur_x0 = 0; cur_y0 = 0;
+    cur_x0 = 40 * 65536; cur_y0 = 40 * 65536;
 
-    // --- pan right by 32 output pixels: the origin moves 32 * step
+    // --- drag right by 32 output pixels: the land follows, so the origin falls
     reset_pan;
     x_before = cur_x0;
     act(32, 0, 0);
-    want(cur_x0 - x_before == 32 * 65536, "pan of 32 pixels moves 32 steps");
+    want(x_before - cur_x0 == 32 * 65536,
+         "dragging 32 pixels right walks the origin 32 steps left");
     want(cur_step == 32'd65536, "pan leaves the step alone");
 
-    // --- pan back past the left edge: stops at zero
+    // --- drag past the left edge: the land stops at the edge of the level
     reset_pan;
-    act(-128, 0, 0);
-    want(cur_x0 == 0, "pan clamps at the left edge");
+    cur_x0 = 65536;
+    act(128, 0, 0);
+    want(cur_x0 == 0, "a drag to the right clamps at the left edge");
+
+    // --- the keyboard still pans the view toward the arrow it was given
+    reset_pan;
+    cur_x0 = 40 * 65536;
+    x_before = cur_x0;
+    act(32, 0, 0, 3'b000, 1'b0);
+    want(cur_x0 - x_before == 32 * 65536, "a keyboard pan keeps its own direction");
 
     // --- the cursor follows the mouse, and stays on the screen
     reset_pan;
@@ -139,7 +148,7 @@ initial begin
     // --- with no button down the mouse moves the marker and not the land
     reset_pan;
     cur_base = lv_base0; cur_w = 4608; cur_h = 4608;
-    cur_x0 = 655360; cur_y0 = 327680; cur_step = 32'd65536;
+    cur_x0 = 40 * 65536; cur_y0 = 327680; cur_step = 32'd65536;
     x_before = cur_x0;
     act(32, 16, 0, 3'b000);
     want(cur_x0 == x_before && cur_y0 == 327680,
@@ -150,7 +159,7 @@ initial begin
     // --- with the left button down the same motion moves the land
     x_before = cur_x0;
     act(32, 16, 0, 3'b001);
-    want(cur_x0 - x_before == 32 * 65536, "the hand on the land pans it");
+    want(x_before - cur_x0 == 32 * 65536, "the hand on the land pulls it the way the cursor goes");
     want(ptr_hold == 1'b1, "the marker shows the button held");
 
     // --- the wheel zooms about the marker, not the middle of the screen

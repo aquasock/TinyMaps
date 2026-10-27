@@ -817,3 +817,37 @@ Two changes the user asked for next: the marker doubles to thirty-two pixels, an
 - User Test: PASS
 
 ---
+
+## 24 COMMIT Unreleased 2026-10-26T19:57:06-07:00
+
+#### Coming From:
+
+Unreleased 3f7b081
+
+#### Purpose:
+
+Double the cursor marker and turn the hand round, after the user drove the first cursor build and reported that the drag pulled the land the opposite way to the cursor.
+
+#### Outcome:
+
+Both changes are small and neither touched the sampling. The marker went from sixteen pixels to thirty-two with the proportions kept -- a four-pixel frame and a four-pixel crosshair, still centred on the pixel it marks -- and the drag now subtracts the mouse report instead of adding it, so dragging right sends the picture right, which is what a hand on the land does. The inversion is deliberately confined to the drag: a keyboard pan still adds its report, because the arrows move the view toward the arrow and a key press is not a hand, and a new test pins that direction so the two mappings cannot drift together later. Two of the existing pan tests had to move their starting origin out to mid-level, because a rightward drag now walks the viewport origin down and a test that began at zero was clamping rather than panning; that was the test's setup and not the logic, and the failures it produced before the fix are what identified it. Every testbench and both checkers pass, `check_render` included. The eight-seed sweep gives seven of eight passing at 78.44 to 82.41 MHz, one more than the previous build and with a higher ceiling, so whatever the marker geometry costs it is under what the routing between the row buffers and the SDRAM controller varies by seed to seed. Deployed as `tinymaps.e8242e81daf7.bin`, 4,431,542 bytes, at seed 1 and 82.41 MHz against 74.25, with the palette, the level table and the viewport re-sent; the pack was not reloaded because the board had stayed powered and the SDRAM still held it, and the map came up. The user reports both changes right, which is also the first hardware acceptance of the cursor work committed as entry 23. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The margin is the outstanding engineering item: seven of eight seeds pass but the worst is 71.37 and the spread is eleven megahertz, and the path that decides it is 4.5 ns of routing between the renderer's row buffers and the SDRAM controller rather than any one expression, so it needs looking at directly instead of being swept away by seed choice. Free rotation stays out of scope until a bandwidth model says the row-based sampler could serve a diagonal output line, and the board's dead power input is still a rework with the machine running from J5 at 4.2 V.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_nav.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_nav.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

@@ -385,7 +385,7 @@ always @(posedge hclk) begin
     rd_q3 <= rd_q2;
 end
 // ------------------------------------------------------------- the cursor ---
-// A sixteen-pixel marker centred on the cursor, drawn over the picture rather
+// A thirty-two-pixel marker centred on the cursor, drawn over the picture rather
 // than through the palette so the pack's colours are untouched.  Green frame
 // while nothing is held and a red crosshair while a button is, which is
 // TinyCreature's own scheme -- the colours change the moment a button moves,
@@ -400,11 +400,11 @@ end
 // the marker against it.
 wire [11:0] spx = {1'b0, cx} - {1'b0, ptr_x};
 wire [11:0] spy = {1'b0, cy} - {1'b0, ptr_y};
-wire        sp_in   = (spx[11:4] == 8'd0) && (spy[11:4] == 8'd0);
-wire        sp_edge = (spx[3:0] < 4'd2) || (spx[3:0] > 4'd13) ||
-                      (spy[3:0] < 4'd2) || (spy[3:0] > 4'd13);
-wire        sp_mid  = (spx[3:0] == 4'd7) || (spx[3:0] == 4'd8) ||
-                      (spy[3:0] == 4'd7) || (spy[3:0] == 4'd8);
+wire        sp_in   = (spx[11:5] == 7'd0) && (spy[11:5] == 7'd0);
+wire        sp_edge = (spx[4:0] < 5'd4) || (spx[4:0] > 5'd27) ||
+                      (spy[4:0] < 5'd4) || (spy[4:0] > 5'd27);
+wire        sp_mid  = (spx[4:0] >= 5'd14 && spx[4:0] <= 5'd17) ||
+                      (spy[4:0] >= 5'd14 && spy[4:0] <= 5'd17);
 wire        sp_hit  = sp_in && (ptr_hold ? sp_mid : sp_edge);
 wire [23:0] rgb_vis = sp_hit ? (ptr_hold ? 24'hFF0000 : 24'h00FF00)
                              : ((cy < OUT_H) ? pal[rd_q3] : 24'h000000);
