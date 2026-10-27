@@ -177,6 +177,32 @@ testbench than from a rebuilt renderer.
 2. **Is 4 bits per pixel acceptable** -- yes.
 3. **Is "sharp where you stay, soft while you move" acceptable** -- yes.
 
+## Progress
+
+- **Done: the tile pack** (item 1) -- `maps_pack.py tiles` writes 256-pixel tiles
+  at 4bpp with per-tile palettes, 14.24 MiB against 27.62 for the same ground, and
+  `verify-tiles` decodes every tile against its source.
+- **Done: the page table** (`maps_tiles.sv`) -- a direct-mapped cache of 512 slots
+  holding 32-bit tags in block RAM with the valid bits in flip-flops so reset
+  clears them, because a garbage tag with its valid bit set would be a false hit
+  and the renderer would draw another part of the map.  `fill_addr` is an output:
+  the hash chooses the slot, so the loader is told where the bytes belong.
+- **Done: the fetch arithmetic** (`maps_tile_addr.sv`) -- given a row and an
+  absolute entry, which tile it is in, the byte offset inside that tile and how
+  many entries run to the tile boundary.  Absolute, not a stride from the window
+  start: chunks break on the tile grid, so a fixed stride disagrees with it at
+  every boundary but the first.
+- **Next: the chunked fetch in the renderer**, then the request protocol and the
+  TinyTang tile server, then prefetch, eviction and the fallback, then 4bpp in the
+  pixel path.
+
+**A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
+At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the
+low and high byte by parity -- would need nibble extraction instead. So the first
+streaming path uses **8bpp tiles**, where a tile row is 256 bytes, exactly one
+SDRAM line and 128 entries, which is the geometry the video channel already has;
+4bpp then changes the packing and the pixel path, not the fetch.
+
 ## Implementation order
 
 1. **Tile-indexed pack format**, 4bpp, on the card: a header with the level table

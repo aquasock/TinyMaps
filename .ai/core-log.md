@@ -1011,3 +1011,37 @@ The page table and tile pool in fabric come next, then the chunked fetch in the 
 - User Test: N/A
 
 ---
+
+## 30 COMMIT Unreleased 2026-10-26T23:29:09-07:00
+
+#### Coming From:
+
+Unreleased d6a0cea
+
+#### Purpose:
+
+Build and prove the two pieces the tile fetch stands on -- the page table that says which slot holds which tile, and the arithmetic that locates one entry of a source row inside a tile -- without touching the renderer that currently works.
+
+#### Outcome:
+
+`fpga/tinymaps/maps_tiles.sv` is a **direct-mapped cache** of 512 slots: the slot is a hash of the tile's level and coordinates, one 32-bit tag per slot says what it holds, and a lookup is one comparator and one block RAM read instead of a search across 512 tags. It is a cache and says so, so a tile whose slot has since been reused is a miss rather than an error. Two things the design forced are worth recording. The valid bits are flip-flops, not part of the tag, because a block RAM's power-up contents are not to be depended on and a garbage tag with its valid bit set would be a **false hit** -- the renderer drawing another part of the map, which looks like a rendering fault rather than an addressing one -- so reset clears the flops and stale tags are then harmless. And `fill_addr` came out as an output rather than an input: the first version let the loader choose a slot and the testbench caught it, because in a direct-mapped cache the hash decides the slot, so the loader has to be told where the bytes belong. `fpga/tinymaps/maps_tile_addr.sv` is the fetch arithmetic: given a source row and an absolute entry it returns the tile, the byte offset inside it and how many entries run to the tile boundary. Its testbench found three real mistakes in my own first version -- the entry offset within a tile row is seven bits because a row is 128 entries and not eight bits, the chunk index had to go because chunks break on the *tile grid* rather than at a fixed stride from the window start, and `{e0[12:1], 1'b0}` shifted back without doubling so every tile index came out half. The testbench that caught the last two recomposes each chunk back into a level coordinate, which is the check a shape test would miss. Both testbenches pass and the full suite is fifteen of fifteen. One design correction came out of the work: **the first streaming path uses 8bpp tiles, not 4bpp.** A 16-bit entry carries two 8-bit indices today and the pixel pipeline extracts the low and high byte by parity; at 4bpp an entry would carry four pixels and the pipeline would need nibble extraction, so 4bpp would have forced a pixel-path change before the fetch could work at all. At 8bpp a tile row is 256 bytes, exactly one SDRAM line and 128 entries -- the geometry the video channel already has -- so the fetch change stays inside the fetch engine and 4bpp becomes a packing and pixel-path change afterwards, which is where the scope's implementation order already had it. Nothing was built or deployed: these are two modules and their testbenches, not yet instantiated in the top, so the board is untouched on `tinymaps.ac916e42ed71`. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The chunked fetch in `maps_render`: `f_base` and `f_cnt` become per-chunk quantities computed from `maps_tile_addr` and looked up in `maps_tiles`, with the entry counter continuous across chunks and a wait state for the lookup's cycle, in both the rotating path and the blocking one. That is the first change to the renderer that works, so it needs its own testbench walking a row across five slot boundaries -- and the 8bpp geometry says it will cost about a dozen clocks of page misses, not a redesign.
+
+#### Files Modified:
+
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_tile_addr.sv
+- fpga/tinymaps/maps_tiles.sv
+- sim/tb_maps_tile_addr.sv
+- sim/tb_maps_tiles.sv
+
+#### Status:
+
+- Build: N/A
+- Deployment: N/A
+- User Test: N/A
+
+---
