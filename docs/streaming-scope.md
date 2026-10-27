@@ -382,8 +382,27 @@ testbench than from a rebuilt renderer.
   now follows the window the rows actually came from (`k0 <= f_col` when they
   land), which is right for both paths and both scales.  The fallback line is
   pixel-exact in simulation for the first time since it was written.
+- **The board showed torn tiles, and it was right to.**  On hardware the whole
+  picture had scattered wrong pixels, and panning turned it into a smear.  The
+  cause was that a fill into a slot left the *previous* tenant's tag valid for the
+  whole 0.32 s the 64 KiB took to arrive, so lookups for the old tile still hit and
+  the renderer read a slot half old and half new.  The commit ordering protected
+  the new tile and never protected the old one.  `fill_inval` now pulses on a
+  tile's first block and clears the slot's valid bit, so a slot being overwritten
+  is a miss: the renderer falls back to the level below for that line instead of
+  reading a tear.  `sim/tb_maps_link_rx.sv` gained the test that matters -- a tile
+  is resident, its refill starts, the lookup must miss, and after the last block
+  it must hit again.
+- **And the pool is too small for the finest level.**  At z15 with a fallback
+  behind it, one screen wants about forty fine tiles and twelve coarse ones, which
+  is fifty-two of the pool's sixty-four slots: even a perfect hash cannot keep
+  that distinct as the window moves, so it thrashes -- on the board it livelocked
+  on two tiles whose slots collided (level 1 at `5,0` and level 0 at `6,0` both
+  hash to slot 6).  Sixty-four 64 KiB slots is not enough.  Half-size tiles are:
+  at 4bpp the same 4 MiB holds 128 slots, which makes a 52-tile working set
+  comfortable, so 4bpp moves from "someday" to the next thing that matters.
 - **Still open:** the request queue asking two or three times for a tile already
-  on its way, prefetch and eviction, and 4bpp.  Also: the switch-mid-fetch repair
+  on its way, prefetch and eviction.  Also: the switch-mid-fetch repair
   is **not** covered by simulation -- the bench passes with the guard and without
   it, and driving `stream` from a register made the whole bench fail for reasons
   not chased, so hardware was the only judge of that one.

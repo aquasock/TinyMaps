@@ -154,6 +154,7 @@ module maps_link_rx #(
     output reg  [14:0] fill_tx,
     output reg  [14:0] fill_ty,
     input  wire [24:0] fill_addr,      // where those coordinates' bytes belong
+    output reg         fill_inval,     // a tile's first block is starting
     output reg         fill_commit,    // this tile's last block is in the pool
 
     // viewport, latched only when the command's own guard accepts it
@@ -439,6 +440,7 @@ always @(posedge clk or negedge resetn) begin
         fill_level <= 2'd0; fill_tx <= 15'd0; fill_ty <= 15'd0;
         fill_commit <= 1'b0;
         stream_on <= 1'b0; m_got <= 1'b0; m_byte <= 8'd0;
+        fill_inval <= 1'b0;
         vs <= V_IDLE; vp_valid <= 1'b0; vp_byte <= 8'd0; vb <= 5'd0;
         vw <= 32'd0; v_base <= 32'd0; v_wh <= 32'd0; v_step <= 32'd0;
         v_x0 <= 32'd0; v_y0 <= 32'd0; v_crc <= 32'hFFFFFFFF; v_rx <= 32'd0;
@@ -713,6 +715,10 @@ always @(posedge clk or negedge resetn) begin
                         after_tx <= S_MAGIC; st <= S_TX;
                         ts <= T_IDLE;
                     end else begin
+                        // the first block of a tile makes its slot unreadable:
+                        // the old tenant is about to be overwritten a word at a
+                        // time and a half-written tile is worse than a miss
+                        fill_inval <= (t_off == 16'd0);
                         t_left  <= t_cnt_n;
                         t_addr  <= fill_addr + {9'd0, t_off};
                         t_last  <= (blk_end(t_off, t_cnt_n) == TB_MAX);

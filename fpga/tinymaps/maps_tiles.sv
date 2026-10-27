@@ -31,6 +31,13 @@
 // Filling is two things and not one.  `fill_addr` answers "where do these
 // coordinates' bytes belong", and it is a function of the coordinates rather
 // than an event, because the loader needs the address *before* it has the bytes.
+// `fill_inval` is the other end of the same story: the moment a fill *starts*, the
+// slot stops being readable.  Without it the slot's previous tenant stays valid
+// for the half second a 64 KiB fill takes, and the renderer reads a tile that is
+// half old and half new -- scattered wrong pixels across the picture, which is
+// exactly what the board showed.  A commit is only safe if the invalidation
+// preceded it.
+//
 // `fill_commit` is the event: the tile's last block is in the pool and the slot
 // now holds that tile.  Marking it resident when the address was handed out
 // would make a half-written tile a hit, which is the same failure as a garbage
@@ -64,6 +71,7 @@ module maps_tiles #(
     output wire [24:0] fill_addr,      // where those bytes belong in the pool
 
     // and this is the tile landing: the bytes above are all in the pool
+    input  wire        fill_inval,      // a fill is beginning: the slot is not readable
     input  wire        fill_commit,
 
     // how often it has answered either way, for the link's status command
@@ -124,6 +132,10 @@ always @(posedge clk) begin
         end else begin
             pend <= 1'b0;
         end
+
+        // the fill has begun: whatever was in that slot is not there any more,
+        // and must not be read while it is being overwritten
+        if (fill_inval) vbit[fill_slot_h] <= 1'b0;
 
         // the tile is whole and in the pool: now it is resident
         if (fill_commit) begin

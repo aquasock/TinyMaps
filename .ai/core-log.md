@@ -1475,3 +1475,37 @@ On hardware next: the same level-3 view, which should now stop asking for the ti
 - User Test: NOT RUN
 
 ---
+
+## 43 COMMIT Unreleased 2026-10-27T14:30:08-07:00
+
+#### Coming From:
+
+Unreleased 23a5b9f
+
+#### Purpose:
+
+Fix the torn tiles the board showed under streaming, where the whole picture carried scattered wrong pixels and a pan turned it into a smear.
+
+#### Outcome:
+
+The user's report was scattered wrong pixels everywhere and, on the first mouse-driven pan, a vertical smear. The cause was in the fill, not the fetch: a slot's tag stayed valid for the whole 0.32 s a 64 KiB tile takes to arrive, so a lookup for the tile that was there *before* still hit and the renderer read a slot half old and half new. The commit ordering added two cycles ago protected the new tile and never protected the old one from being read while it was being overwritten. `maps_tiles` gained `fill_inval`, which clears the slot's valid bit, and `maps_link_rx` pulses it on a tile's first block -- the only point that knows the fill has begun -- so a slot being written is a miss and the renderer falls back to the level below for that line instead of drawing a tear. `sim/tb_maps_link_rx.sv` gained the test that states the guarantee: a tile is resident, its refill starts, a lookup must miss, and after the last block it must hit again. Writing that test also found the bench had never connected the loader's new output at all, which is how a check that looks like it exercises something can exercise nothing. One stale expectation fell out too: test 7 asserted exactly one commit, which a legitimate refill in the new test had made two, so it now compares against a mark. The same hardware run also bounded the pool: at z15 with a fallback behind it a screen wants about forty fine tiles and a dozen coarse ones, fifty-two of the pool's sixty-four slots, and on the board it livelocked on two tiles whose slots collided -- level 1 at `5,0` and level 0 at `6,0` both hash to slot 6. Sixty-four 64 KiB slots cannot hold that working set whatever the hash, so half-size tiles become the next thing that matters: at 4bpp the same 4 MiB holds 128 slots. Seventeen of seventeen testbenches pass with `check_render` and `check_tmds`, and eight of eight seeds pack from 76.18 to 87.27 MHz. Nothing was deployed; the board still runs `tinymaps.46884191295c.bin`, which is the build without this fix. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy this and repeat the two hardware tests: level 3 should still be clean, and a level-1 view should now sharpen without the scattered wrong pixels and survive a mouse pan. The finest level will still thrash, because it is a pool-size problem rather than a tearing one -- so 4bpp is next: 32 KiB tiles, 128 slots, a nibble extractor in the pixel path and per-tile palettes in the pack. After that, the request queue's pending set and then prefetch and eviction, which need the pool to say when it is full.
+
+#### Files Modified:
+
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/maps_tiles.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_link_rx.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

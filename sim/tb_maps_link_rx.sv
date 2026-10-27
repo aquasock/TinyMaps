@@ -47,6 +47,7 @@ localparam int    TB_SLOTS = 8;
 wire [1:0]  fill_level;
 wire [14:0] fill_tx, fill_ty;
 wire        fill_commit;
+wire        fill_inval;
 wire        stream_on;
 wire [24:0] fill_addr;
 
@@ -55,6 +56,8 @@ reg  [1:0]  c_level = 2'd0;
 reg  [14:0] c_tx = 15'd0, c_ty = 15'd0;
 reg  [24:0] c_addr = 25'd0;
 integer     commits = 0;
+integer     commit_mark = 0;
+
 always @(posedge clk)
     if (fill_commit) begin
         commit_seen <= 1'b1;
@@ -76,7 +79,7 @@ maps_tiles #(.SLOTS(TB_SLOTS), .TBITS(16), .POOL_BASE(TB_POOL)) u_tiles (
     .clk(clk), .resetn(resetn),
     .lk_valid(lk_valid), .lk_level(lk_level), .lk_tx(lk_tx), .lk_ty(lk_ty),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
-    .fill_commit(fill_commit), .fill_level(fill_level),
+    .fill_commit(fill_commit), .fill_inval(fill_inval), .fill_level(fill_level),
     .fill_tx(fill_tx), .fill_ty(fill_ty), .fill_addr(fill_addr),
     .hits(), .misses(), .idle());
 
@@ -151,7 +154,7 @@ maps_link_rx #(.TILES(1'b1)) dut (
     .wr_req(wr_req), .wr_addr(wr_addr), .wr_lanes(wr_lanes),
     .wr_wdata(wr_wdata), .wr_ack(wr_ack),
     .fill_level(fill_level), .fill_tx(fill_tx), .fill_ty(fill_ty),
-    .fill_addr(fill_addr), .fill_commit(fill_commit),
+    .fill_addr(fill_addr), .fill_commit(fill_commit), .fill_inval(fill_inval),
     .stream_on(stream_on),
     .busy(busy), .images(images), .bytes_written(bytes_written),
     .last_nak(last_nak), .overflows(overflows), .timeouts(timeouts)
@@ -449,12 +452,34 @@ initial begin
     if (bad != 0) begin $display("FAIL: %0d of the last block's bytes wrong", bad); errors = errors + 1; end
     else $display("PASS: the tile's last block landed");
 
+    // 6b. a fill makes its slot unreadable while it runs: the tile that was there
+    //     before must not be served from a slot being overwritten, or the picture
+    //     shows a tile half old and half new
+    $display("--- test 6b: a slot is unreadable while it is being filled");
+    lookup(2'd1, 15'd5, 15'd2);
+    if (hit_now !== 1'b1) begin
+        $display("FAIL: not resident before the refill"); errors = errors + 1;
+    end
+    send_tile(2'd1, 15'd5, 15'd2, 0, 1024, 1'b0);      // its first block again
+    expect_byte(8'h06, "refill first block ACK");
+    lookup(2'd1, 15'd5, 15'd2);
+    if (hit_now !== 1'b0) begin
+        $display("FAIL: the slot stayed readable while its fill ran"); errors = errors + 1;
+    end else $display("PASS: a slot is unreadable while its fill runs");
+    send_tile(2'd1, 15'd5, 15'd2, 64512, 1024, 1'b0);
+    expect_byte(8'h06, "refill last block ACK");
+    lookup(2'd1, 15'd5, 15'd2);
+    if (hit_now !== 1'b1) begin
+        $display("FAIL: still unreadable after the fill"); errors = errors + 1;
+    end else $display("PASS: and readable again once the fill is whole");
+
     // 7. a block whose CRC is wrong is refused and commits nothing
     $display("--- test 7: a corrupt tile block is refused");
+    commit_mark = commits;
     send_tile(2'd2, 15'd1, 15'd1, 0, 1024, 1'b1);
     expect_byte(8'h15, "tile block NAK");
     expect_byte("D", "tile block NAK letter");
-    if (commits != 1) begin $display("FAIL: a refused block committed a tile"); errors = errors + 1; end
+    if (commits != commit_mark) begin $display("FAIL: a refused block committed a tile"); errors = errors + 1; end
     else $display("PASS: a refused block commits nothing");
 
     // 8. a block that is not whole words is refused before it is written

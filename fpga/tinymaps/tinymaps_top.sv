@@ -462,6 +462,7 @@ maps_link_rx #(.TILES(1'b1)) u_loader (
     // page table derives, and is committed to the table when its last block is in
     .fill_level(fill_level), .fill_tx(fill_tx), .fill_ty(fill_ty),
     .fill_addr(fill_addr), .fill_commit(fill_commit),
+    .fill_inval(fill_inval),
     .vp_we(vp_we), .vp_base(vp_base), .vp_w(vp_w), .vp_h(vp_h),
     .vp_step(vp_step), .vp_x0(vp_x0), .vp_y0(vp_y0),
     .st_base(LEVEL_BASE), .st_w(LEVEL_W), .st_h(LEVEL_H), .st_step(STEP),
@@ -484,6 +485,7 @@ maps_link_rx #(.TILES(1'b1)) u_loader (
 // remembers what it was told, which is what makes a tile the host sends land in
 // the reserved pool and be findable later.
 wire        fill_commit;
+wire        fill_inval;
 wire [1:0]  fill_level;
 wire [14:0] fill_tx, fill_ty;
 wire [24:0] fill_addr;
@@ -493,7 +495,7 @@ maps_tiles #(.SLOTS(POOL_SLOTS), .TBITS(16), .POOL_BASE(POOL_BASE)) u_tiles (
     // the sequencer asks, about the level it is actually fetching
     .lk_valid(lk_valid), .lk_level(seq_level), .lk_tx(lk_tx), .lk_ty(lk_ty),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
-    .fill_commit(fill_commit), .fill_level(fill_level),
+    .fill_commit(fill_commit), .fill_inval(fill_inval), .fill_level(fill_level),
     .fill_tx(fill_tx), .fill_ty(fill_ty), .fill_addr(fill_addr),
     .hits(), .misses(), .idle()
 );
