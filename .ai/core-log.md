@@ -980,3 +980,34 @@ Wait for the user's answers to the three questions -- tile source, whether 4 bit
 - User Test: N/A
 
 ---
+
+## 29 COMMIT Unreleased 2026-10-26T23:15:27-07:00
+
+#### Coming From:
+
+Unreleased 6665c7a
+
+#### Purpose:
+
+Record the user's streaming decisions, correct the scope's risk assessment against the code, and build the 4bpp tile pack format the rest of the architecture reads.
+
+#### Outcome:
+
+The user settled the three questions the scope left open: tiles come from the SD card served by the BL616 and no configuration flash is used, four bits per pixel is acceptable, and sharp-where-you-stop with soft-while-you-move is the wanted trade. The flash was dropped because it is *smaller* than the area streaming exists to reach -- eleven to fifteen megabytes is about 280 square kilometres at z15 in 8bpp, barely more than the 22 km pack that already fits, so streaming from it would defeat the purpose -- and because the BL616 already reads the card for every other core, which makes the card the pattern rather than a compromise. The scope now records all of that and its open questions become answered ones. Its risk assessment was also corrected against the code, and this was the useful part: the video channel reads 128 halfwords, 256 bytes per request, and a 256-pixel tile row at one byte per pixel is exactly 256 bytes, so **a tile row is one SDRAM line read**. A line fetch spans 644 entries, which is 5.03 line reads, so a tile-mapped row crossing five boundaries is 5 or 6 -- the same order of magnitude rather than six times the work. What tiles cost is page misses rather than reads, a few clocks each, on the order of a dozen clocks out of the 1650 a line has. The fetch engine was described as the whole risk in the previous entry and that was wrong. The first piece of the implementation is in: `tools/maps_pack.py tiles` writes a `TMTL` pack of 256-pixel tiles at 4bpp with a 16-colour palette of each tile's own, 455 tiles in 14.24 MiB against the 8bpp pack's 27.62 for the same ground, every level keeping the shared origin so a level crossing stays a doubling. Levels are padded up to whole tiles because their rasters are not multiples of 256 -- L3 is 832 by 864 -- which keeps every record 256 by 256 and puts the filler outside the level where the clamp never looks. `maps_pack.py verify-tiles` decodes every tile with its own palette and compares it against the source it claims to be, which is the check that catches a transposed or shifted tile that a structural check would pass, and reports the worst tile at 8.7 to 10.3 of 255 against its source, roughly four times the shared-palette pack's error and the accepted cost of sixteen colours. Nothing was built or deployed: the change is host-side plus documentation, so no bitstream applies and the board is untouched on `tinymaps.ac916e42ed71` from entry 26. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The page table and tile pool in fabric come next, then the chunked fetch in the renderer with a testbench that walks a source row across five slot boundaries and checks the entries land in order and the line still completes in its budget -- which the 256-byte arithmetic now says should cost about a dozen clocks, so the testbench is confirming a prediction rather than discovering a cost. After that the request protocol and a TinyTang tile server, then prefetch, eviction and the coarse fallback, and last the 4bpp path in the pixel pipeline with per-tile palettes.
+
+#### Files Modified:
+
+- docs/streaming-scope.md
+- tools/maps_pack.py
+
+#### Status:
+
+- Build: N/A
+- Deployment: N/A
+- User Test: N/A
+
+---

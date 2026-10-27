@@ -9,6 +9,8 @@ and OpenStreetMap attribution.
   maps_pack.py fetch                download the tiles into the cache
   maps_pack.py pack                 build the pack file from the cache
   maps_pack.py verify <pack>        decode a pack and compare against the cache
+  maps_pack.py tiles [<out>]        build a 4bpp tile pack for streaming
+  maps_pack.py verify-tiles <pack>  check every tile record's shape and indices
 """
 import json, math, os, struct, sys, time, zlib
 import numpy as np
@@ -180,6 +182,180 @@ def pack(ls):
               f"{e['width']*e['height']/1048576:7.2f} MiB  merc-mpp {e['mpp']:.3f}  off {e['offset']}  crc {e['crc']:08x}")
     return entries
 
+# ---------------------------------------------------------- tile packs (TMTL) --
+# A tile pack is what streaming needs: one record per 256-pixel tile, four bits
+# per pixel with a sixteen-entry palette of the tile's own, laid out so a tile's
+# bytes are contiguous and a tile row is exactly one 256-byte SDRAM line.
+#
+#   0   u32  magic 'TMTL'
+#   4   u16  version = 1
+#   6   u16  level count
+#   8   u32  tile pixels (256)
+#   12  u8   bits per pixel (4)
+#   13  u8   palette entries (16)
+#   14  u16  zero
+#   16  u32  tile payload bytes (32768, the nibbles of one tile)
+#   20  u32  record bytes (16*3 + payload = 32816)
+#   24  u32  tile data offset
+#   28  u32  total bytes
+#   32  u32  header CRC-32 over the header with this field zeroed, the level
+#            table and every tile record
+#   36  u8   name[32]
+#   68  level table, 40 bytes each:
+#         u32 tiles x, u32 tiles y, u32 zoom, u32 m/px Q16.16,
+#         i32 origin 3857 x, i32 origin 3857 y, u32 first tile, u32 zero
+#   then the tile records in level order, row-major within a level.
+#
+# Every level shares the origin rule of the 8bpp pack: the finest level's tile
+# corner, so a level crossing stays a doubling of the coordinates.
+
+THDR, TENT, TREC = 68, 40, 48 + 256 * 256 // 2
+TSIZE, TBITS, TPAL = 256, 4, 16
+
+
+def padded_mosaic(l):
+    """the level's raster padded up to whole tiles, with the grid it needs.
+
+    A level's width and height are not multiples of the tile size -- L3 is
+    832x864 -- so the last column and row of tiles would be part of a tile and
+    part nothing.  Padding to whole tiles keeps every record 256x256 and puts the
+    filler outside the level, where the renderer's clamp never looks.
+    """
+    im = mosaic(l)
+    gx = (l['width'] + TSIZE - 1) // TSIZE
+    gy = (l['height'] + TSIZE - 1) // TSIZE
+    out = Image.new("RGB", (gx * TSIZE, gy * TSIZE), (0, 0, 0))
+    out.paste(im, (0, 0))
+    return out, gx, gy
+
+
+def tile_records(ls):
+    """(record bytes) for every tile, level order, row-major within a level"""
+    out = []
+    for l in ls:
+        im, gx, gy = padded_mosaic(l)
+        for ty in range(gy):
+            for tx in range(gx):
+                box = (tx * TSIZE, ty * TSIZE, (tx + 1) * TSIZE, (ty + 1) * TSIZE)
+                t = im.crop(box)
+                q = t.quantize(colors=TPAL, method=Image.MEDIANCUT, dither=Image.NONE)
+                pal = bytes(q.getpalette()[:TPAL * 3]).ljust(TPAL * 3, b"\0")
+                idx = np.asarray(q, np.uint8)
+                assert idx.max() < TPAL, (idx.max(), tx, ty)
+                # two pixels a byte, high nibble first, row by row
+                packed = (idx[:, 0::2] << 4) | idx[:, 1::2]
+                out.append((pal, packed.astype(np.uint8).tobytes()))
+    return out
+
+
+def pack_tiles(ls, out_path):
+    recs = tile_records(ls)
+    first = []
+    grids = []
+    n = 0
+    for l in ls:
+        _im, gx, gy = padded_mosaic(l)
+        grids.append((gx, gy))
+        first.append(n)
+        n += gx * gy
+    assert len(recs) == n, (len(recs), n)
+
+    body = bytearray()
+    for pal, px in recs:
+        body += pal + px
+    data_off = THDR + TENT * len(ls)
+
+    hdr = bytearray(THDR)
+    struct.pack_into("<4sHHIBBHIIII", hdr, 0, b"TMTL", 1, len(ls), TSIZE, TBITS, TPAL, 0,
+                     TSIZE * TSIZE // 2, TREC, data_off, data_off + len(body))
+    hdr[36:68] = b"Phoenix metro tiles 4bpp".ljust(32, b"\0")
+
+    tbl = bytearray()
+    for l, f, (gx, gy) in zip(ls, first, grids):
+        tbl += struct.pack("<IIIIiiII", gx, gy, l['zoom'],
+                           int(round(l['mpp'] * 65536)),
+                           int(round(l['ox'])), int(round(l['oy'])), f, 0) + b"\0" * 8
+    assert len(tbl) == TENT * len(ls)
+
+    hdr[32:36] = b"\0\0\0\0"
+    crc = zlib.crc32(bytes(hdr) + bytes(tbl) + bytes(body))
+    struct.pack_into("<I", hdr, 32, crc)
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "wb") as f:
+        f.write(hdr); f.write(tbl); f.write(body)
+    print(f"wrote {out_path}: {data_off + len(body)} bytes "
+          f"({(data_off + len(body)) / 1048576:.2f} MiB), {n} tiles, "
+          f"{TBITS} bpp, header crc {crc:08x}")
+    for l, f, (gx, gy) in zip(ls, first, grids):
+        c = gx * gy
+        print(f"  L{l['level']} z{l['zoom']}: {gx}x{gy} = {c} tiles "
+              f"from {f}, {c * TREC / 1048576:.2f} MiB")
+    return 0
+
+
+def read_tiles(p):
+    b = open(p, "rb").read()
+    magic, ver, nlev, tsz, bits, pal, _z, pay, rec, doff, total = \
+        struct.unpack_from("<4sHHIBBHIIII", b, 0)
+    assert magic == b"TMTL", magic
+    assert tsz == TSIZE and bits == TBITS and pal == TPAL, (tsz, bits, pal)
+    assert rec == TREC and total == len(b), (rec, total, len(b))
+    hdr = bytearray(b[:THDR]); hdr[32:36] = b"\0\0\0\0"
+    want = struct.unpack_from("<I", b, 32)[0]
+    assert zlib.crc32(bytes(hdr) + b[THDR:doff] + b[doff:total]) == want, "header crc"
+    lvs = []
+    for i in range(nlev):
+        tx, ty, z, mpp, ox, oy, first, _r = struct.unpack_from("<IIIIiiII", b, THDR + TENT * i)
+        lvs.append(dict(level=i, tx=tx, ty=ty, zoom=z, mpp=mpp / 65536, ox=ox, oy=oy, first=first))
+    return dict(levels=lvs, data=b[doff:total], name=b[36:68].rstrip(b"\0").decode())
+
+
+def verify_tiles(p):
+    pk = read_tiles(p)
+    ls = levels()
+    ok = True
+    print(f"{p}: '{pk['name']}', {len(pk['levels'])} levels, "
+          f"{len(pk['data']) // TREC} tiles")
+    origins = {(lv['ox'], lv['oy']) for lv in pk['levels']}
+    if len(origins) == 1:
+        print(f"  origin 3857 {origins.pop()} shared by all levels")
+    else:
+        print(f"  origins differ: {sorted(origins)}")
+        ok = False
+    for lv, l in zip(pk['levels'], ls):
+        n = lv['tx'] * lv['ty']
+        im = np.asarray(padded_mosaic(l)[0], np.int16)
+        bad = worst = 0
+        for k in range(n):
+            off = (lv['first'] + k) * TREC
+            pal = np.frombuffer(pk['data'][off:off + TPAL * 3], np.uint8).reshape(TPAL, 3)
+            px = np.frombuffer(pk['data'][off + TPAL * 3:off + TREC], np.uint8)
+            assert px.size == TSIZE * TSIZE // 2, (px.size, k)
+            hi, lo = px >> 4, px & 0x0F
+            idx = np.empty(TSIZE * TSIZE, np.uint8)
+            idx[0::2], idx[1::2] = hi, lo
+            if idx.max() >= TPAL or pal.shape != (TPAL, 3):
+                bad += 1
+                continue
+            # decode and compare against the tile this record claims to be: a
+            # transposed or shifted tile is well formed and wrong, and only this
+            # catches it
+            got = pal[idx.reshape(TSIZE, TSIZE)].astype(np.int16)
+            tx, ty = k % lv['tx'], k // lv['tx']
+            src = im[ty * TSIZE:(ty + 1) * TSIZE, tx * TSIZE:(tx + 1) * TSIZE]
+            mean = float(np.abs(got - src).mean())
+            worst = max(worst, mean)
+            if mean > 12.0:            # 16 colours on aerial imagery
+                bad += 1
+        print(f"  L{lv['level']} z{lv['zoom']}: {lv['tx']}x{lv['ty']} = {n} tiles, "
+              f"worst tile {worst:4.1f}/255 vs its source, "
+              f"{'all decode to their place' if bad == 0 else str(bad) + ' wrong'}")
+        ok &= bad == 0
+    print("VERDICT:", "PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
 def main():
     if len(sys.argv) < 2: print(__doc__); return 1
     cmd = sys.argv[1]; ls = levels()
@@ -195,6 +371,10 @@ def main():
     if cmd == "fetch": fetch(ls); return 0
     if cmd == "pack":  pack(ls);  return 0
     if cmd == "verify": return verify(sys.argv[2])
+    if cmd == "tiles":
+        out = sys.argv[2] if len(sys.argv) > 2 else "work/pack/phoenix-18km.tmtl"
+        return pack_tiles(ls, out)
+    if cmd == "verify-tiles": return verify_tiles(sys.argv[2])
     if cmd == "extract":
         # the raw eight-bit raster of one level, for tools/load_image.py
         if len(sys.argv) < 4:

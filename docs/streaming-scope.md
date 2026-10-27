@@ -64,6 +64,41 @@ Derived from those:
    black. The renderer already has bilinear scaling and a level per viewport, so
    this is a second read path rather than new arithmetic.
 
+## Decisions taken
+
+Settled 2026-10-26:
+
+- **Tiles come from the SD card, served by the BL616.** No config flash. The card
+  is what every other core already loads from, it holds more than any working set
+  by three orders of magnitude, and the flash is *smaller* than the area
+  streaming is meant to reach -- 11 to 15 MB is about 280 km2 at z15 8bpp, barely
+  more than the 22 km pack that already fits. The flash only bought bandwidth for
+  a store too small to stream from.
+- **4 bits per pixel.** Halves the bytes in SDRAM and on the wire.
+- **Sharp where the viewer stays, soft while they move.** The fallback draws the
+  coarser level scaled up; nothing waits for a tile.
+
+## The fetch is cheaper than this document first feared
+
+Checked against the code after the decision: the video channel reads **128
+halfwords, 256 bytes, per `vstart`**, and a 256-pixel tile row at one byte per
+pixel is exactly 256 bytes. So a tile row is *one* SDRAM line read, one to one.
+Today's line fetch is `SPAN` = 644 entries, which is 5.03 line reads. A tiled
+source row crossing five tile boundaries is therefore 5 or 6 line reads -- the
+same order of magnitude, not six times the work.
+
+What tiled fetching costs is not more reads but **page misses**: today's five
+lines are mostly consecutive addresses inside one SDRAM page, while tiles land in
+arbitrary slots. A row activation is a few clocks at 74 MHz, so going from about
+three activations to five or six costs on the order of a dozen clocks out of the
+1650 a line has.
+
+`maps_video_rd` already does what the tiled fetch needs -- start at an arbitrary
+entry within a 256-byte line and read N of them. The change is that `f_cnt` and
+`f_base` become per-chunk quantities recomputed from the page table, with the
+entry counter continuous across chunks, in both the rotating path and the
+blocking one.
+
 ## The four decisions
 
 **A. Where do tiles come from?** This is the decision that sets the ceiling,
@@ -136,10 +171,25 @@ testbench than from a rebuilt renderer.
 - **The two open defects are untouched**: the status readback's top byte above
   16 MB, and the zoom ceiling on the finest level.
 
-## Open questions for the user
+## Answered
 
-1. **Where do tiles come from** -- host, BL616 SD, or the FPGA's own flash? This
-   sets the ceiling and the firmware work.
-2. **Is 4bpp acceptable** for the doubled effective rate and smaller pool?
-3. **Is "sharp where you stop, soft while you move" acceptable**, or is a hard
-   limit on pan speed wanted instead?
+1. **Where do tiles come from** -- the SD card, served by the BL616. No flash.
+2. **Is 4 bits per pixel acceptable** -- yes.
+3. **Is "sharp where you stay, soft while you move" acceptable** -- yes.
+
+## Implementation order
+
+1. **Tile-indexed pack format**, 4bpp, on the card: a header with the level table
+   and a tile directory, one 32 KiB record per tile, each tile carrying its own
+   16-colour palette. `tools/maps_pack.py` grows a `tiles` mode.
+2. **Page table and tile pool in fabric**: N slots of 32 KiB in SDRAM, a
+   `(level, tx, ty) -> slot` table with valid bits, and the fetch engine reading
+   it per chunk.
+3. **Chunked fetch in the renderer**, with a testbench that walks a source row
+   across five slot boundaries and checks the entries land in the right order and
+   the line still completes inside its budget.
+4. **Request and reply over the link**: the fabric asks for a tile, the BL616
+   answers from the card. A TinyTang cycle.
+5. **Prefetch, eviction and the coarse fallback**, which needs (1) to (4).
+6. **4bpp in the pixel path**: the index pipeline takes a 4-bit index and a
+   per-tile palette instead of one shared 256-entry table.
