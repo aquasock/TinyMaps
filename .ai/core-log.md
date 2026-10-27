@@ -887,3 +887,35 @@ Build the same tree at 2 Mbaud and sixteen samples, at the two seeds whose 5 Mba
 - User Test: PASS
 
 ---
+
+## 26 COMMIT Unreleased 2026-10-26T22:13:35-07:00
+
+#### Coming From:
+
+Unreleased e87d122
+
+#### Purpose:
+
+Find out why the 5 Mbaud build passed only one placement seed of eight, and fix the cause rather than sweep for a lucky one.
+
+#### Outcome:
+
+The controlled comparison came first, because the previous cycle had changed two things at once. The same tree built at 2 Mbaud and sixteen samples gave 82.41 MHz at seed 1 and 78.79 at seed 7, where 5 Mbaud and eight samples gave 74.21 and 74.97 at those same seeds, so the link constants were innocent and the 5 Mbaud netlist had simply been placed worse. The placement report then said what had moved: with the renderer's row pair and fetch base address already given their own cycles in earlier cycles, the critical path was in `maps_nav`, where `N_PAN` computed four clamped candidates -- each a 32-bit add, a compare and a mux -- straight into the same register's enable. It measured 13.48 ns against a 13.47 ns period and 1.27 ns of it was a route from a site to itself, which is a placement pathology rather than a logic one, but the shape of the chain was the reason the placer had nowhere good to put it. A new `N_PRE` state registers the four candidates one clock before `N_PAN` chooses between them, so `N_PAN` is now a three-way mux and an accumulator decrement; it costs one clock in the sixteen a nudge takes, and `tb_maps_nav` passes every case including the pan distance, both clamps, the cursor, the grab and the pivot zoom. The same two seeds at 5 Mbaud then returned **82.21** and **84.35 MHz** -- up 8.0 and 9.4 -- and both beat what the 2 Mbaud build manages at those seeds, so the three chains now hoisted out (the row pair, the fetch base and the pan candidates) have taken the design from one seed of eight to at least two of two placed with margin. The wider eight-seed sweep did not complete: the background launches for it died repeatedly before any build started, and the honest state is two placements measured at 82.21 and 84.35 rather than a full spread. Deployed as `tinymaps.ac916e42ed71.bin`, the 5 Mbaud parameterisation at seed 7 and 84.35 MHz, with the ballast pack reloaded at the faster link in 70 s rather than 155 and the view returned to L3; the user reports it behaving exactly like the previous build, which is the pass this change needs because the risk in it was the pan arithmetic rather than the picture. The committed default stays at 2 Mbaud and sixteen samples, and the 5 Mbaud default used for the measurement was reverted before committing: a core that defaults to 5 Mbaud is deaf after `tangload` until `fpgabaud 5000000` is typed, which is the wrong default for a viewer, so the faster link is a build parameter plus one command and the entry for it is entry 25. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The eight-seed sweep of this build still owes a number, and the background launches need to be replaced with something that survives before it is trusted again. With margin at 82 to 84 MHz and the panel of recurring wide chains now hoisted, the streaming architecture is unblocked: a tile pool with a page table in fabric, a fetch engine that follows a tile map across a 256-pixel boundary instead of one linear base address, prefetch and eviction driven by the viewport, and a miss falling back to the next coarser level rather than drawing garbage. The bandwidth it can expect is measured -- 431 kB/s at 5 Mbaud -- so a 64 KB tile is 0.15 s and a z15 screenful about 2 s, and 4-bit tiles would halve both.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- fpga/tinymaps/maps_nav.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

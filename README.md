@@ -55,6 +55,20 @@ That testbench exists because the fault was invisible to everything else: the
 renderer's own testbench bypasses the adapter, and a model of the channel that
 behaves better than `sdram_ctrl` does not reproduce it.
 
+**Three wide chains have now each been given their own clock**, which is what
+this design needed and what the timing margin is made of. The renderer's row pair
+(`S_ROWS`) and its fetch base address (`S_RADDR`) came first, and the
+navigation's pan candidates (`N_PRE`) closed it: `N_PAN` was computing four
+clamped candidates -- a 32-bit add, a compare and a mux each -- straight into the
+same register's enable, and once the renderer's chains had moved that became the
+critical path at 13.48 ns against a 13.47 ns period, with 1.27 ns of it a route
+from a site to itself. Registering the candidates a cycle early took the 5 Mbaud
+build from 74.21 to **82.21** MHz at seed 1 and from 74.97 to **84.35** at seed 7,
+both of which now beat what the 2 Mbaud build manages at the same seeds
+(82.41 and 78.79). The pattern is worth remembering: a wide chain in front of a
+register's enable is the shape this design fails on, and the fix is always to
+hoist the arithmetic into its own state.
+
 **The link to the BL616 is the real ceiling on loading**, and it has been
 measured rather than assumed: 190 kB/s at the board's 2 Mbaud, which is 95% of
 that UART's wire rate, so the framing costs about 5% and there is nothing else

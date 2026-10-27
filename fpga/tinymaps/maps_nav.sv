@@ -142,7 +142,8 @@ reg        t_fine, t_coarse;
 
 localparam [2:0] N_IDLE = 3'd0, N_PAN = 3'd1, N_ZOOM = 3'd2,
                  N_APPLY = 3'd3, N_DONE = 3'd4,
-                 N_PIVOT = 3'd5;      // the cursor-times-step multiply, registered
+                 N_PIVOT = 3'd5,      // the cursor-times-step multiply, registered
+                 N_PRE = 3'd6;        // the clamped nudge candidates, registered
 reg [2:0] ns;
 
 // the new step, and the step in force, as signed values for the arithmetic
@@ -189,6 +190,12 @@ wire signed [31:0] max_y_old = max_steps($signed({16'd0, cur_h}) * 32'sd65536 -
 
 reg signed [31:0] ax0, ay0;
 reg signed [31:0] dxc, dyc;            // the pivot shift, one cycle ahead of use
+// The pan's four clamped candidates, registered a cycle before they are chosen.
+// Computing them inside N_PAN put a 32-bit add, a compare and a mux in front of
+// the same register's enable, which became the design's critical path once the
+// renderer's row pair and fetch address had their own cycles: 13.48 ns against a
+// 13.47 ns period, with 1.27 ns of it a route from a site to itself.
+reg signed [31:0] x_up, x_dn, y_up, y_dn;
 
 always @(posedge clk) begin
     o_we <= 1'b0;
@@ -201,6 +208,7 @@ always @(posedge clk) begin
         t_level <= 2'd0; t_step <= 32'd65536; t_fine <= 1'b0; t_coarse <= 1'b0;
         ax0 <= 32'sd0; ay0 <= 32'sd0;
         dxc <= 32'sd0; dyc <= 32'sd0;
+        x_up <= 32'sd0; x_dn <= 32'sd0; y_up <= 32'sd0; y_dn <= 32'sd0;
         o_base <= 25'd0; o_w <= 16'd0; o_h <= 16'd0;
         o_step <= 32'd65536; o_x0 <= 32'sd0; o_y0 <= 32'sd0;
         ptr_x <= OUT_W[10:0] >> 1;     // the marker starts in the middle
@@ -236,37 +244,47 @@ always @(posedge clk) begin
                 if (!ev_mouse) begin
                     acc_x <= acc_x + ev_px;
                     acc_y <= acc_y + ev_py;
-                    ns <= N_PAN;
+                    ns <= N_PRE;
                 end else if (ev_btn[0]) begin
                     acc_x <= acc_x - ev_px;
                     acc_y <= acc_y - ev_py;
-                    ns <= N_PAN;
+                    ns <= N_PRE;
                 end else begin
                     ns <= N_ZOOM;
                 end
             end
 
             // whole nudges only; a remainder waits for the next report
+            // the candidates, from the origin as it stands now
+            N_PRE: begin
+                x_up <= (nx0 + nudge > max_x_old) ? max_x_old : nx0 + nudge;
+                x_dn <= (nx0 < nudge) ? 32'sd0 : nx0 - nudge;
+                y_up <= (ny0 + nudge > max_y_old) ? max_y_old : ny0 + nudge;
+                y_dn <= (ny0 < nudge) ? 32'sd0 : ny0 - nudge;
+                ns   <= N_PAN;
+            end
+
             N_PAN: if (ct == 5'd0 ||
                        (acc_x > -NUDGE && acc_x < NUDGE &&
                         acc_y > -NUDGE && acc_y < NUDGE)) begin
                 ns <= N_ZOOM;
             end else begin
                 if (acc_x >= NUDGE) begin
-                    nx0   <= (nx0 + nudge > max_x_old) ? max_x_old : nx0 + nudge;
+                    nx0   <= x_up;
                     acc_x <= acc_x - NUDGE;
                 end else if (acc_x <= -NUDGE) begin
-                    nx0   <= (nx0 < nudge) ? 32'sd0 : nx0 - nudge;
+                    nx0   <= x_dn;
                     acc_x <= acc_x + NUDGE;
                 end
                 if (acc_y >= NUDGE) begin
-                    ny0   <= (ny0 + nudge > max_y_old) ? max_y_old : ny0 + nudge;
+                    ny0   <= y_up;
                     acc_y <= acc_y - NUDGE;
                 end else if (acc_y <= -NUDGE) begin
-                    ny0   <= (ny0 < nudge) ? 32'sd0 : ny0 - nudge;
+                    ny0   <= y_dn;
                     acc_y <= acc_y + NUDGE;
                 end
                 ct <= ct - 5'd1;
+                ns <= N_PRE;                  // the next nudge needs new candidates
             end
 
             N_ZOOM: begin

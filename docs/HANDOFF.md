@@ -124,7 +124,26 @@
   emit that needed it, which put the next line into the blocking path too and
   cascaded for four lines -- the frame-top corruption.  The user reports pan and
   zoom work; the frame top has not been confirmed separately.
-- **Measured this cycle - the link, and 12 Mbaud ruled out.**  The BL616 link
+- **Fixed this cycle - the pan's arithmetic, and with it the 5 Mbaud margin.**
+  The link work left the 5 Mbaud build marginal, one seed of eight passing at
+  74.97, and the placement report said why: once the renderer's row pair and
+  fetch base had their own cycles, the critical path moved into `maps_nav`, where
+  `N_PAN` computed four clamped candidates -- add, compare, mux, each 32 bits --
+  into the same register's enable, 13.48 ns against a 13.47 ns period with 1.27
+  ns of it a route from a site to itself. A new `N_PRE` state registers those
+  candidates one clock before `N_PAN` chooses between them, costing one clock in
+  the sixteen a nudge takes. The controlled comparison first established that the
+  link constants were innocent: the same tree at 2 Mbaud gave 82.41 and 78.79 at
+  seeds 1 and 7 where 5 Mbaud gave 74.21 and 74.97, so the netlist's placement
+  had changed, not the UART. With the fix the same two seeds give 82.21 and
+  84.35 at 5 Mbaud -- better than the 2 Mbaud build at the same seeds. Deployed
+  as `tinymaps.ac916e42ed71.bin` at seed 7, 84.35 MHz, with the pack reloaded and
+  the view on L3, and the user reports it behaves exactly like the previous
+  build. The committed default stays 2 Mbaud and sixteen samples: a 5 Mbaud
+  default leaves the core deaf after `tangload` until `fpgabaud 5000000` is
+  typed, which is a poor default for a viewer, so the faster link is a build
+  parameter plus one console command rather than the shipped default.
+- **Measured last cycle - the link, and 12 Mbaud ruled out.**  The BL616 link
   was measured at 190 kB/s on 2 Mbaud (95% of its wire rate, so framing costs
   about 5%) and at **431 kB/s on 5 Mbaud**, the same 4 MiB in 9.7 s against
   22.0 s.  The oversampling is what sets the ceiling: sixteen samples a bit
