@@ -455,7 +455,11 @@ maps_tile_req #(.DEPTH(8)) u_req (
     .tx_start(req_tx_start), .tx_data(req_tx_data), .req_hold(req_hold),
     .count(req_depth), .overflow());
 
-maps_link_rx #(.TILES(1'b1)) u_loader (
+// TBYTES is what makes a tile's last block the last: the loader compares the
+// block's end against it to decide when to commit, so a loader that still thinks
+// a tile is 64 KiB while the pool is built for 16 never commits anything and the
+// picture asks for the same tile for ever.
+maps_link_rx #(.TILES(1'b1), .TBYTES(TILE_PX * TILE_PX)) u_loader (
     .clk(hclk), .resetn(rstn_h),
     .rx_data(urx_data), .rx_valid(urx_valid),
     .tx_start(ld_tx_start), .tx_data(ld_tx_data),

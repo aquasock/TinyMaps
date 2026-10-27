@@ -1543,3 +1543,33 @@ Deploy on the user's word and repeat the level-3, level-1 and level-0 tests, the
 - User Test: NOT RUN
 
 ---
+
+## 45 COMMIT Unreleased 2026-10-27T16:44:12-07:00
+
+#### Coming From:
+
+Unreleased fcc6882
+
+#### Purpose:
+
+Record and fix the one-line top-level omission that stopped a 16 KiB tile from ever being committed.
+
+#### Outcome:
+
+The 128-pixel build went on the board and the picture asked for one tile for ever: `L1 6,9`, delivered, acknowledged and asked for again, 214 times in twenty-five seconds. The tile was landing and never becoming resident, and the cause was in `tinymaps_top` rather than in any module: `maps_link_rx` decides a tile is whole by comparing the block's end against its `TBYTES` parameter, and the instance was still taking the default 65536 while the pool was built for 16384, so the last block of a 16 KiB tile was never the last and the commit never happened. The instance now passes `TBYTES(TILE_PX * TILE_PX)`, the same expression the page table is given, so the two cannot disagree about how big a tile is. It is a wiring omission of exactly the kind nothing in the test suite can see: no testbench instantiates the top, and the loader's own test drives 64 KiB tiles, which is its default. Where a parameter has to mean the same thing in two instances, the honest fix is to derive both from one localparam rather than rely on a reader noticing. The build passes at 84.45 MHz at seed 1. Nothing was deployed: the Tang left USB between the build finishing and the upload starting, and only an unrelated ESP32 board is enumerated. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy `tinymaps.aae022f453bf.bin` when the board is back and repeat the finest-level test with the 128-pixel pack: the level-0 view should now commit its tiles and hold them, which is the first time its working set fits. Then level 3 and level 1 as regressions, then a pan. After that, the request queue's pending set, then prefetch and eviction.
+
+#### Files Modified:
+
+- fpga/tinymaps/tinymaps_top.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---
