@@ -1405,3 +1405,39 @@ Deploy `tinymaps.e6b43ef04d53.bin` and repeat the same view: with the hash fixed
 - User Test: NOT RUN
 
 ---
+
+## 41 COMMIT Unreleased 2026-10-27T12:26:58-07:00
+
+#### Coming From:
+
+Unreleased 71e9056
+
+#### Purpose:
+
+Get streaming working on the board, after the hash fix left it asking for nothing at all.
+
+#### Outcome:
+
+The hash-fixed image went on and the picture still asked for nothing. The status command gained the two bytes that answer the question it could not: byte 21 says whether the picture is coming from the pool and byte 22 says how many tile requests are waiting, and the base readout was fixed at the same time, since it took its top byte from out of range and reported `0xafaee3d8` for `0x01aee3d8` once a pool address passed sixteen megabytes. One read settled it -- `source = tile pool`, `renderer = blocking fetch`, `requests = 0`, and nine seconds of silence on the wire -- so the miss was never reaching the request queue and the renderer was wedged, not the transmitter. The cause was the runtime source switch: the video channel is muxed on the same signal the renderer watches, so switching while a linear fetch was in flight sent that fetch's completion to the sequencer instead, `f_busy` never cleared, the fetch engine never issued again and no miss was ever raised. It was timing-dependent, which is why switching while idle worked this morning and the later attempts did not. `maps_render` now abandons whatever was in flight when the source changes: both request lines drop, the miss flag and the retry timer clear, the row buffers are invalidated and the line engine returns to idle. With that, the same view, pack and server that had produced silence asked for `L3 0,0` onwards, took each 64 KiB tile in 0.32 s in 64 blocks, and drew; the user passed it. Two tooling faults cost time on the way and are recorded rather than fixed: the Tang came back as `/dev/ttyACM2` because a Pico2 and an ESP32 took the lower numbers while every tool defaults to `/dev/ttyACM0`, so two attempts went to the wrong device, and the switch-mid-fetch repair is not covered by simulation -- the bench passes with the guard and without it, and driving `stream` from a register failed the whole bench for reasons not chased, so hardware was the only judge. Seventeen of seventeen testbenches pass with `check_render` and `check_tmds`, and eight of eight seeds pack from 84.37 to 92.28 MHz, seed 1 at 92.28 being the image deployed as `tinymaps.46ea1fa2bbf5.bin`. The board went back to the user holding that bitstream in SRAM with the source on the pool; nothing else on the card was touched. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The fetch window still runs past the level's right edge, which the host now answers with blank tiles rather than a refusal -- honest, but it asks for tiles that cannot exist every line. That, and the fallback's `k0` being the fine window start where the coarse scale needs `k0_e`, want one cycle with a testbench that models the level's bounds; then the request queue's pending set, so one blocking fetch does not ask three times for one tile; then a fine level, where the pool cannot hold the view and the fallback and the re-requests are what the picture depends on.
+
+#### Files Modified:
+
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/maps_render.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_stream.sv
+- tools/read_status.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

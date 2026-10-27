@@ -194,6 +194,7 @@ reg [20:0] retry_cnt;                 // and this is how long before it asks aga
 // buffers remember which scale their contents are, because a line may only mix
 // rows that came from the same level.
 reg        cfall;
+reg        stream_d;                  // the source the picture was being drawn from
 reg  [2:0] bcrs;                      // per row buffer: fetched from the level below
 reg [24:0] f_base;
 reg [15:0] f_cnt;
@@ -284,6 +285,7 @@ always @(posedge clk or negedge resetn) begin
         f_req <= 1'b0; f_busy <= 1'b0; f_ack <= 1'b0; f_buf <= 2'd0;
         f_missed <= 1'b0; retry_cnt <= 21'd0; block_retry <= 3'd0;
         cfall <= 1'b0; bcrs <= 3'b000;
+        stream_d <= 1'b0;
         f_j <= {AIDX{1'b0}}; f_row <= 32'd0; f_col <= 32'd0;
         f_base <= 25'd0; f_cnt <= 16'd0;
         p1_v <= 1'b0; p1_odd <= 1'b0; p1_bil <= 1'b0; p1_x <= 12'd0;
@@ -520,6 +522,27 @@ always @(posedge clk or negedge resetn) begin
         S_DONE: st <= S_IDLE;
         default: st <= S_IDLE;
         endcase
+
+        // Changing the picture's source abandons whatever fetch was in flight.
+        // The video channel is muxed on the same signal, so a linear fetch that
+        // was in flight when the host switched to the pool would wait for a
+        // completion that can never arrive: `f_busy` would stay set, the fetch
+        // engine would never issue again, and no miss would ever reach the
+        // request queue -- a board that draws nothing and asks for nothing.
+        // It costs one line to give up cleanly instead.
+        stream_d <= stream;
+        if (stream != stream_d) begin
+            f_req     <= 1'b0;
+            f_busy    <= 1'b0;
+            f_missed  <= 1'b0;
+            retry_cnt <= 21'd0;
+            rd_start  <= 1'b0;
+            seq_start <= 1'b0;
+            block_step <= 3'd0;
+            bval      <= 3'b000;
+            cfall     <= 1'b0;
+            st        <= S_IDLE;
+        end
     end
 end
 

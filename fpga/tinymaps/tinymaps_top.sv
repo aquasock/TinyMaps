@@ -438,13 +438,15 @@ maps_tile_fetch #(.SPAN(SPAN), .TSIZE(256), .TENT(128), .TW(8)) u_seq (
 // Ask for what is not there.  A request is not acknowledged: the answer is the
 // tile's bytes arriving as command 0x1D, and one that goes unanswered is asked
 // again when the renderer retries.
+wire [7:0] req_depth;
+
 maps_tile_req #(.DEPTH(8)) u_req (
     .clk(hclk), .resetn(rstn_h),
     .miss(seq_miss), .miss_level(miss_level),
     .miss_tx(miss_tx), .miss_ty(miss_ty),
     .tx_grant(!ld_tx_start), .tx_ready(!utx_busy), .tx_ack(req_ack),
     .tx_start(req_tx_start), .tx_data(req_tx_data), .req_hold(req_hold),
-    .count(), .overflow());
+    .count(req_depth), .overflow());
 
 maps_link_rx #(.TILES(1'b1)) u_loader (
     .clk(hclk), .resetn(rstn_h),
@@ -464,6 +466,7 @@ maps_link_rx #(.TILES(1'b1)) u_loader (
     .vp_step(vp_step), .vp_x0(vp_x0), .vp_y0(vp_y0),
     .st_base(LEVEL_BASE), .st_w(LEVEL_W), .st_h(LEVEL_H), .st_step(STEP),
     .st_x0(SRC_X0), .st_y0(SRC_Y0), .st_rstate(render_state),
+    .req_depth(req_depth),
     .lv_valid(lv_valid),
     .lv_base0(lv_base0), .lv_base1(lv_base1),
     .lv_base2(lv_base2), .lv_base3(lv_base3),

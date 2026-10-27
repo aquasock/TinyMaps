@@ -342,7 +342,15 @@
   coprime with the slot count; that build is not deployed yet.  Two smaller faults
   the same run exposed -- the fetch window running past the level's edge, and the
   request queue asking two or three times for a tile already on its way -- are
-  recorded there and unfixed.  See `docs/streaming-scope.md`.
+  recorded there and unfixed.  **Streaming now works on the board**: the
+  remaining fault was that the runtime source switch stole the video channel from
+  a linear fetch already in flight, which left the renderer waiting for a
+  completion that could never come -- it drew nothing and asked for nothing.  A
+  source change abandons the fetch now, and a level-3 view asked for its tiles,
+  took them at 0.32 s each and drew, which the user passed.  The deployed image
+  is `tinymaps.46ea1fa2bbf5.bin`.  Note the console is not always on
+  `/dev/ttyACM0`: the Tang came back as `ttyACM2` once other boards were plugged
+  in, and every tool takes `--port`.  See `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The

@@ -350,9 +350,33 @@ testbench than from a rebuilt renderer.
   the testbench has to model level bounds before it can be trusted, and that is a
   bigger change than this cycle had room for.  The clamp and the `k0` fix belong in
   the same cycle as the bench that can judge them.
-- **Next: deploy this and look at it.**  The pack is 28.44 MiB against a 4 MiB pool,
-  so the first pan is onto ground that is not resident.  Then the clamp and the
-  pending set, prefetch and eviction, and 4bpp in the pixel path.
+- **Done: streaming works on the board.**  The hash fix went on and the picture
+  still asked for nothing, which the new status bytes answered in one read --
+  `source = tile pool`, `renderer = blocking fetch`, `requests = 0` and not one
+  byte on the wire.  So the miss never reached the queue: the renderer was wedged.
+  The cause was the runtime source switch.  The video channel is muxed on the same
+  signal the renderer watches, so switching while a *linear* fetch was in flight
+  sent that fetch's completion to the sequencer instead, `f_busy` never cleared,
+  the fetch engine never issued again, and the board drew nothing and asked for
+  nothing.  Timing-dependent, which is why switching while idle worked and the
+  later attempts did not.  A source change now abandons whatever was in flight,
+  and with it the same view, pack and server that had produced silence asked for
+  `L3 0,0` onwards, took each 64 KiB tile in 0.32 s, and drew.  The user's verdict
+  was pass.
+- **The port moved.**  The Tang came back as `/dev/ttyACM2` -- a Pico2 and an
+  ESP32 took the lower numbers -- and the tools default to `/dev/ttyACM0`, so two
+  attempts went to the wrong device.  Everything takes `--port`; picking the
+  device by its `/dev/serial/by-id` name would be the fix in the tools.
+- **Still open:** the fetch window running past the level's right edge (the pool
+  answers those requests blank now, which is honest but wasteful), the fallback's
+  `k0` being the fine window start where it should be the coarse one, the request
+  queue asking two or three times for a tile already on its way, prefetch and
+  eviction, and 4bpp.  Also: the switch-mid-fetch repair is **not** covered by
+  simulation -- the bench passes with the guard and without it, and driving
+  `stream` from a register made the whole bench fail for reasons not chased, so
+  hardware is the only judge of that one.
+- **Next:** the clamp and the pending set, then a fine level where the pool cannot
+  hold the view, which is what the fallback and the re-requests exist for.
 
 **A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
 At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the

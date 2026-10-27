@@ -10,6 +10,9 @@ pipe a host uses is raw:
 
     tools/read_status.py
 
+Byte 20 is the renderer's state, 21 whether the picture is coming from the
+pool, and 22 how many tile requests are waiting to go out.
+
 State is 0 idle, 1 plan, 2 blocking fetch, 3 fetch, 4 emit, 5 done.  A picture
 that freezes into one repeated row means the renderer is drawing the same source
 line every time; these numbers say whether the step, the origin or the level
@@ -47,20 +50,22 @@ def main():
         port.write(frame(b"\x00", CMD_STATUS))     # one dummy byte: a bare command is dropped
         got = b""
         end = time.monotonic() + 3.0
-        while len(got) < 21 and time.monotonic() < end:
+        while len(got) < 23 and time.monotonic() < end:
             got += port.read(64)
     finally:
         port.close()
 
-    if len(got) < 21:
-        print(f"FAILED: {len(got)} of 21 bytes back: {got.hex()}")
+    if len(got) < 23:
+        print(f"FAILED: {len(got)} of 23 bytes back: {got.hex()}")
         return 1
 
     base, w, h, step, x0, y0, st = struct.unpack("<IHHIII", got[:20]) + (got[20],)
-    print(f"level base {base:#08x}  {w}x{h}")
+    print(f"level base {base & 0x1FF_FFFF:#08x}  {w}x{h}")
     print(f"step       {step} ({(step or 0)/65536:.4f} source px per output px)")
     print(f"origin     x {x0/65536:.2f}  y {y0/65536:.2f}   (raw {x0}, {y0})")
     print(f"renderer   {STATES.get(st, st)}")
+    print(f"source     {'tile pool' if got[21] else 'the pack'}")
+    print(f"requests   {got[22]} waiting")
     return 0
 
 

@@ -189,6 +189,9 @@ module maps_link_rx #(
     input  wire signed [31:0] st_x0, st_y0,
     input  wire [2:0]  st_rstate,
 
+    // how many tile requests are waiting, for the status command
+    input  wire [7:0]  req_depth,
+
     // status
     output reg         busy,
     output reg  [31:0] images,
@@ -286,8 +289,13 @@ reg        ss_active;
 reg [4:0]  ss_i;
 reg [4:0]  ss_wait;
 
+// the base is twenty-five bits, and a byte taken from it has to be zero-extended
+// or the top byte reads out of range: the status command reported 0xafaee3d8 for
+// a base of 0x01aee3d8 until the pool's addresses passed sixteen megabytes
+wire [31:0] st_base32 = {7'd0, st_base};
+
 wire [7:0] ss_byte =
-    (ss_i <  5'd4)  ? st_base[8*ss_i[1:0] +: 8] :
+    (ss_i <  5'd4)  ? st_base32[8*ss_i[1:0] +: 8] :
     (ss_i == 5'd4)  ? st_w[7:0] :
     (ss_i == 5'd5)  ? st_w[15:8] :
     (ss_i == 5'd6)  ? st_h[7:0] :
@@ -295,7 +303,9 @@ wire [7:0] ss_byte =
     (ss_i <  5'd12) ? st_step[8*(ss_i - 5'd8) +: 8] :
     (ss_i <  5'd16) ? st_x0[8*(ss_i - 5'd12) +: 8] :
     (ss_i <  5'd20) ? st_y0[8*(ss_i - 5'd16) +: 8] :
-                      {5'd0, st_rstate};
+    (ss_i == 5'd20) ? {5'd0, st_rstate} :
+    (ss_i == 5'd21) ? {7'd0, stream_on} :
+                      req_depth;
 
 // --------------------------------------------------------------- viewport ----
 // Command 0x0A.  Twenty bytes of body then its CRC, walked a byte at a time.
@@ -793,7 +803,7 @@ always @(posedge clk or negedge resetn) begin
             end else if (!tx_busy) begin
                 ss_wait <= 5'd0;
                 ss_i    <= ss_i + 5'd1;
-                if (ss_i == 5'd20) ss_active <= 1'b0;
+                if (ss_i == 5'd22) ss_active <= 1'b0;
             end
         end
 
