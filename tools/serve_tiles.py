@@ -116,8 +116,9 @@ def read_frames(port, deadline):
                     state, buf = "hunt", bytearray()
 
 
-def serve(port, pk, blocks, count, quiet):
+def serve(port, pk, blocks, count, quiet, once=False):
     served = 0
+    done = set()
     while count == 0 or served < count:
         got = False
         for frame in read_frames(port, time.monotonic() + 30.0):
@@ -128,11 +129,18 @@ def serve(port, pk, blocks, count, quiet):
                     print(f"  ignoring command {frame[3]:02x} ({len(frame)} bytes)")
                 continue
             level, tx, ty = req
+            if once and (level, tx, ty) in done:
+                continue
+            done.add((level, tx, ty))
             data = tile_bytes(pk, level, tx, ty)
             if data is None:
+                # Past the edge of the level.  The renderer's fetch window is
+                # wider than a level can be, so the last chunks of a line ask for
+                # a tile that cannot exist; the honest answer is a blank tile --
+                # there is no map out there -- and it keeps the line completing.
                 if not quiet:
-                    print(f"  asked for L{level} {tx},{ty}, which this pack does not have")
-                continue
+                    print(f"  L{level} {tx},{ty} is outside the level, answering blank")
+                data = bytes(65536)
             t0 = time.monotonic()
             for off in range(0, len(data), blocks):
                 piece = data[off:off + blocks]
@@ -230,6 +238,10 @@ def main():
     ap.add_argument("--blocks", type=int, default=1024,
                     help="bytes per 0x1D block (a multiple of 8, at most %d)" % BLOCK_MAX)
     ap.add_argument("--count", type=int, default=0, help="stop after this many tiles")
+    ap.add_argument("--once", action="store_true",
+                    help="answer each tile once per run: the core re-asks while an "
+                         "answer is in flight, and a tile already in the pool needs "
+                         "no second copy")
     ap.add_argument("--no-prepare", action="store_true",
                     help="do not load the palette or switch the picture source")
     ap.add_argument("--quiet", action="store_true")
@@ -256,7 +268,7 @@ def main():
         if not args.no_prepare:
             prepare(port, pk, args.quiet)
         print("serving: waiting for tile requests (ctrl-c to stop)")
-        n = serve(port, pk, args.blocks, args.count, args.quiet)
+        n = serve(port, pk, args.blocks, args.count, args.quiet, args.once)
         print(f"served {n} tiles")
     except KeyboardInterrupt:
         print("\nstopped")

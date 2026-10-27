@@ -1370,3 +1370,38 @@ The hardware test this was built for: load the eight-bit pack's palette and coar
 - User Test: NOT RUN
 
 ---
+
+## 40 COMMIT Unreleased 2026-10-27T10:47:49-07:00
+
+#### Coming From:
+
+Unreleased b91ab4c
+
+#### Purpose:
+
+Deploy the streaming path to the Tang, find out why the pooled picture never finished, and fix it.
+
+#### Outcome:
+
+The streaming build went on the board -- `tinymaps.fa2cdc8d61c0.bin`, seed 1 at 81.57 MHz, uploaded under that name so the previous image stayed for rollback -- and it ran: `tangload` reported the core loaded and the status command answered with the expected viewport. `tools/serve_tiles.py` then loaded the eight-bit pack's palette, switched the source with `0x1E`, and the core, with an empty pool, asked for `L3 0,0` and onwards. Each 64 KiB tile took 0.32 s in 64 blocks. The picture never finished, and the cause was the pool's hash: `tx + 31 * ty + level` truncated to the slot count, with 31 equal to minus one modulo 64, so each screen row moved the slot backwards by one -- row 0 used slots 3 to 8, row 1 used 2 to 7, row 2 used 1 to 6. The rows of one screen overlapped almost completely, every delivered tile evicted one the next row needed, the renderer asked again, and the pool livelocked: serving more tiles could never have cured it. Thirteen is coprime with 64, so a row moves the slot on by thirteen and a screen's eighteen tiles get eighteen slots, and it costs three adds rather than a shift and a subtract. Simulation had passed with the old hash because the testbench's own pool used the same arithmetic and its window was small enough to fit. Two smaller faults the same run exposed are recorded and not fixed: the fetch window is a fixed 644 entries where a level can be 832 pixels wide, so the tail of a line asks for tiles past the level's right edge which cannot exist; and the request queue dedupes only against entries still queued, so one blocking fetch asks two or three times for the same tile. An attempt at the window clamp was written and withdrawn: it exposes that the fallback subtracts the fine window start from a coarse-scale index, which wants a testbench that models level bounds before it can be judged, and the board test never exercises the fallback because the coarsest level has none. `tools/serve_tiles.py` answered out-of-level requests with a blank tile so lines could complete, and gained `--once` so a tile already delivered is not sent twice in a run. Seventeen of seventeen testbenches pass with `check_render` and `check_tmds`, and eight of eight seeds pack from 83.88 to 90.51 MHz. The hash fix is built but not deployed, because the board went back to other work; nothing since the previous image is on the Tang. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy `tinymaps.e6b43ef04d53.bin` and repeat the same view: with the hash fixed the pool should stop evicting itself and the picture should complete and stay. Then the window clamp and the fallback's `k0` together, with a testbench that models the level's bounds, and the request queue's pending set so one fetch does not ask for one tile three times.
+
+#### Files Modified:
+
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_tiles.sv
+- sim/tb_maps_stream.sv
+- sim/tb_maps_tiles.sv
+- tools/serve_tiles.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

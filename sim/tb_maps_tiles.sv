@@ -76,7 +76,7 @@ endtask
 
 // the slot the direct mapping assigns, for checking the address
 function automatic integer slot_of(input [1:0] lvl, input [14:0] tx, input [14:0] ty);
-    slot_of = (tx + ty * 31 + lvl) % SLOTS;
+    slot_of = (tx + ty * 13 + lvl) % SLOTS;   // the table's hash: 13, not 31
 endfunction
 
 // present a lookup and return what came back
@@ -125,7 +125,7 @@ initial begin
     // --- filling a shadowing tile evicts: the old one now misses, the new hits
     //     find a pair that lands in the same slot
     begin : evict
-        // slot = (tx + ty*31 + level) mod SLOTS, so a tx 512 further along lands
+        // slot = (tx + ty*13 + level) mod SLOTS, so a tx 512 further along lands
         // in the same slot as tx 5 with the same ty
         fill(2'd0, 15'd1029, 15'd7);
         look(2'd0, 15'd5, 15'd7, hit, addr);

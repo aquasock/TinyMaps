@@ -83,12 +83,14 @@ wire [31:0] fill_tag = {14'd0, fill_level, fill_tx, fill_ty};
 function automatic [SW-1:0] slot_of(input [1:0] lvl, input [14:0] tx, input [14:0] ty);
     reg [21:0] h;
     begin
-        // ty * 31 as a shift and a subtract.  It was written as a multiply, and
-        // that was free while `fill_addr` was a register; the loader now takes
-        // the address before the bytes arrive, so it is combinational and feeds
-        // the SDRAM controller's address mux, where a 22-bit multiplier is most
-        // of a clock period.  Same hash, same slots.
-        h = {7'd0, tx} + ({7'd0, ty} << 5) - {7'd0, ty} + {20'd0, lvl};
+        // ty * 13, as shifts and adds: 13 is coprime with the slot count, so a
+        // row moves the slot on by 13 and a screen's three rows land 13 apart.
+        // It was 31, which is -1 mod 64 -- so a row moved the slot *backwards*
+        // by one, the rows of a screen overlapped almost completely, and every
+        // delivered tile evicted one the line was about to need.  On the board
+        // that is a picture that never finishes: rows keep being thrown out and
+        // re-asked for.  Thirteen rows also multiplies out as three adds.
+        h = {7'd0, tx} + ({7'd0, ty} << 3) + ({7'd0, ty} << 2) + {7'd0, ty} + {20'd0, lvl};
         slot_of = h[SW-1:0];
     end
 endfunction

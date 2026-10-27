@@ -323,10 +323,36 @@ testbench than from a rebuilt renderer.
   waiting for each ACK and re-sending a refused block.  It refuses a four-bit pack
   outright rather than serving one the pixel path would paint with the wrong
   twelve colours.
-- **Next: a hardware test**, which is now possible without firmware on the other
-  side: the pack is 28.44 MiB against a 4 MiB pool, so the very first pan is onto
-  ground that is not resident.  Then prefetch and eviction, which need the pool to
-  report when it is full, and 4bpp in the pixel path.
+- **The pool's hash was wrong, and it took hardware to see it.**  It was
+  `tx + 31*ty + level` truncated to the slot count, and 31 is -1 modulo 64, so a
+  screen row moved the slot *backwards* by one: row 0 used slots 3 to 8, row 1
+  used 2 to 7, row 2 used 1 to 6.  The rows of one screen overlapped almost
+  completely, so every tile the host delivered evicted one the next row was about
+  to need, the renderer asked again, the answer evicted something else, and no
+  frame ever finished -- a livelock, which is what "serving more tiles" could not
+  cure.  Thirteen is coprime with 64, so a row moves the slot on by thirteen and a
+  screen's eighteen tiles get eighteen slots; it also multiplies out as three adds,
+  which is cheaper than the shift and subtract it replaced.  Everything in
+  simulation had passed with the old hash because the testbench's own pool copy had
+  the same slot arithmetic, and its window was small enough to fit anyway.
+- **Two things the hardware run exposed and this cycle did not fix.**  The fetch
+  window is a fixed span of entries -- 644, where a level can be 832 pixels wide --
+  so the tail of a line asks for tiles past the level's right edge, which cannot
+  exist; on the pack path those reads are invisible, and in streaming they block
+  the line on an answer that never comes.  And the request queue dedupes only
+  against entries still in the queue, so the three rows of one blocking fetch ask
+  for the same tile two or three times and get it two or three times.  Both are
+  known and written down here; the clamp and the pending set are the next cycle.
+- **And one the clamp led to.**  With the fetch count clamped at the level's edge,
+  the fallback's arithmetic stops being right: the emit stage subtracts `k0_pf`,
+  the *fine* window start, from an entry index computed at the coarse scale.  At
+  the old geometry it happened to pass; the fix is a one-liner (`k0 <= k0_e`) but
+  the testbench has to model level bounds before it can be trusted, and that is a
+  bigger change than this cycle had room for.  The clamp and the `k0` fix belong in
+  the same cycle as the bench that can judge them.
+- **Next: deploy this and look at it.**  The pack is 28.44 MiB against a 4 MiB pool,
+  so the first pan is onto ground that is not resident.  Then the clamp and the
+  pending set, prefetch and eviction, and 4bpp in the pixel path.
 
 **A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
 At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the

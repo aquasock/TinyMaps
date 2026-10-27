@@ -28,7 +28,7 @@ localparam int OUT_H = 48;
 localparam int SPAN  = OUT_W + 4;
 localparam int TSIZE = 256;                 // pixels across a tile
 localparam int TBITS = 16;                  // log2 of a tile's bytes
-localparam int SLOTS = 8;
+localparam int SLOTS = 64;                  // the top's pool: a window has to fit
 localparam [24:0] POOL = 25'h0010_0000;
 localparam [1:0]  LVL  = 2'd1;              // the level under test
 localparam int    LVL_W = 768, LVL_H = 768; // three tiles by three
@@ -248,6 +248,7 @@ integer seen = 0;
 integer bad_fine = 0, bad_coarse = 0;
 integer y;
 integer scol, srow, ccol, crow;
+integer dbg = 0;
 reg [7:0] exp_f, exp_c;
 task automatic run_line(input integer row, input integer clocks);
     integer t;
@@ -280,6 +281,9 @@ begin
                               ((crow[7:0]) * 256) + ccol[7:0]);
             if (out_idx !== exp_f)   bad_fine   = bad_fine + 1;
             if (out_idx !== exp_c)   bad_coarse = bad_coarse + 1;
+            if (dbg && out_x < 6)
+                $display("  [tb] x %0d idx %02h fine %02h coarse %02h (scol %0d srow %0d)",
+                         out_x, out_idx, exp_f, exp_c, scol, srow);
             if (out_idx !== exp_f && out_idx !== exp_c && (bad_fine + bad_coarse) == 1)
                 $display("  row %0d x %0d: index %02h, want %02h or %02h",
                          row, out_x, out_idx, exp_f, exp_c);
@@ -387,10 +391,12 @@ initial begin
     want(tile_misses > miss_before, "the new view missed its fine tiles");
     repeat (200) @(posedge clk);
     // answer only the coarse requests
+    // keep the fine tiles away for the whole settle, or the picture sharpens and
+    // there is no fallback left to look at
     coarse_only = 1;
     serve_all;
-    coarse_only = 0;
     settle_line(0, 1'b0);
+    coarse_only = 0;
     want(settled == 1, "the line draws from the level below");
     want(seen == OUT_W, "the fallback line emitted its pixels");
     want(bad_coarse == 0, "every pixel is the coarse level's, two by two");

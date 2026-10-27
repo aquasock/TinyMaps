@@ -333,8 +333,16 @@
   `tools/serve_tiles.py` answers the requests from an eight-bit tile pack over the
   same BL616 pipe, so a streaming test needs no firmware on the other side.
   `tools/maps_pack.py tiles --bits=8` builds that pack: 28.44 MiB for the ground
-  the resident pack covers in 27.62, against a 4 MiB pool.  See
-  `docs/streaming-scope.md`.
+  the resident pack covers in 27.62, against a 4 MiB pool.  It has been on the
+  board: the palette and the source switch were accepted, the core asked for
+  `L3 0,0` onwards, and each 64 KiB tile took 0.32 s -- but the picture never
+  finished, and the cause was the pool's hash.  `tx + 31*ty + level` with 31 equal
+  to -1 modulo 64 made each screen row move the slot backwards by one, so the rows
+  evicted each other and the pool livelocked.  The hash is thirteen now, which is
+  coprime with the slot count; that build is not deployed yet.  Two smaller faults
+  the same run exposed -- the fetch window running past the level's edge, and the
+  request queue asking two or three times for a tile already on its way -- are
+  recorded there and unfixed.  See `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The
