@@ -950,3 +950,33 @@ The streaming architecture is unblocked and is the next real piece: a tile pool 
 - User Test: NOT RUN
 
 ---
+
+## 28 COMMIT Unreleased 2026-10-26T22:47:00-07:00
+
+#### Coming From:
+
+Unreleased 3e3f115
+
+#### Purpose:
+
+Scope the tile-streaming architecture and its risks on paper, before any of the renderer that currently works is touched, at the user's request.
+
+#### Outcome:
+
+`docs/streaming-scope.md` sets out what virtual texturing would give this core -- the reachable area becoming as large as the storage behind it rather than one 18.4 km pack, at max zoom anywhere -- and states plainly that the honest description of the result is web-map behaviour on a slow connection, sharp where the viewer settles and soft while they move. It is built from the numbers this project has measured rather than from estimates: 431 kB/s over the link at 5 Mbaud, 190 at the board's 2 Mbaud default, `hclk` between 76.44 and 84.05 MHz across eight placement seeds, and 32 MiB of SDRAM of which 27.62 is the current pack. From those it derives the working figures -- a 256-pixel tile is 64 KiB at 8 bits per pixel and 32 KiB at 4, a z15 screen covers 15 to 24 tiles, a screen takes 2.4 to 3.5 seconds to fill at 8bpp against the two seconds a user takes to drag one screen width, so the link cannot keep up with a fast pan and the design has to degrade rather than wait -- and notes that a coarse overview is cheap enough to hold permanently, a handful of z10 tiles covering the whole metro, which is what makes a fallback affordable. It then gives the shape of the design in five parts, four decisions the user has to make -- where tiles come from among the host link, the BL616's card, the FPGA's own flash with 15 MB free, or an SD card on a header; 4 bits per pixel; pool size and eviction; and whether the fabric or the far end computes the tile list -- and a work breakdown with the fetch engine marked as the whole risk. That risk is stated precisely: today a line fetch is one linear burst of 644 entries covering 1288 source pixels, and with 256-pixel tiles a line becomes up to six bursts in different slots, so the question is whether six SDRAM row activations fit the 1650 clocks a raster line gives where one does today. The document proposes proving that in a testbench before the renderer is touched, and lists what streaming does not solve: the link remains the ceiling, the fallback is soft, and the two small defects are untouched. No code changed, no build or deployment applies, and the three open questions at the end are for the user. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Wait for the user's answers to the three questions -- tile source, whether 4 bits per pixel is acceptable, and whether soft-while-moving is acceptable -- then build the fetch-engine testbench that answers whether six bursts per line fit the per-line budget, since that answer decides the shape of everything after it.
+
+#### Files Modified:
+
+- docs/streaming-scope.md
+
+#### Status:
+
+- Build: N/A
+- Deployment: N/A
+- User Test: N/A
+
+---
