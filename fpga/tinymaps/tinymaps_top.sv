@@ -69,7 +69,13 @@ localparam int OUT_H = 720;
 // wants to end up -- that needs the pack to give up its finest level -- but it
 // is a region nothing else writes, which is what makes accepting tiles safe.
 localparam [24:0] POOL_BASE = 25'h01C0_0000;
-localparam int    POOL_SLOTS = 64;
+// 128-pixel tiles at eight bits are 16 KiB, so the same four megabytes hold 256
+// of them instead of 64.  That is what the pool needed: a z15 screen wants about
+// sixty tiles counting its fallback, which is a third of the pool rather than
+// almost all of it, so the hash stops recycling slots the line is about to read.
+localparam int    TILE_PX    = 128;
+localparam int    TILE_BITS  = 14;            // log2 of 16384 bytes
+localparam int    POOL_SLOTS = 256;
 
 wire clk27, hclk, hclk5, clk, fclk;
 
@@ -423,7 +429,8 @@ maps_uart_tx #(.CLK_HZ(74_250_000), .BAUD(LINK_BAUD), .OVERSAMPLE(LINK_OVERSAMPL
     u_uart_tx (.clk(hclk), .resetn(rstn_h), .start(utx_start), .data(utx_data),
                .tx(uart_tx), .busy(utx_busy));
 
-maps_tile_fetch #(.SPAN(SPAN), .TSIZE(256), .TENT(128), .TW(8)) u_seq (
+maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TILE_PX), .TENT(TILE_PX / 2),
+                  .TW($clog2(TILE_PX))) u_seq (
     .clk(hclk), .resetn(rstn_h),
     .start(seq_start), .level(seq_level), .row(seq_row), .entry0(seq_entry),
     .span(seq_span),
@@ -490,7 +497,8 @@ wire [1:0]  fill_level;
 wire [14:0] fill_tx, fill_ty;
 wire [24:0] fill_addr;
 
-maps_tiles #(.SLOTS(POOL_SLOTS), .TBITS(16), .POOL_BASE(POOL_BASE)) u_tiles (
+maps_tiles #(.SLOTS(POOL_SLOTS), .TBYTES(TILE_PX * TILE_PX),
+             .TBITS(TILE_BITS), .POOL_BASE(POOL_BASE)) u_tiles (
     .clk(hclk), .resetn(rstn_h),
     // the sequencer asks, about the level it is actually fetching
     .lk_valid(lk_valid), .lk_level(seq_level), .lk_tx(lk_tx), .lk_ty(lk_ty),

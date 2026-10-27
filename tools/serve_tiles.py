@@ -17,8 +17,10 @@ table the fabric's pixel path reads, so this is what makes a streamed tile look
 like itself rather than grey.
 
 Only eight-bit packs are served: a four-bit pack carries a palette per tile, and
-the pixel path cannot read nibbles yet, so serving one would paint the picture
-with the wrong twelve colours and no error.  The tool refuses instead.
+the pixel path reads eight-bit indices, so serving one would paint the picture
+with the wrong colours and no error.  The tool refuses instead.  The tile size
+comes out of the pack's header, so a 128-pixel pack (16 KiB a tile, four times as
+many slots in the same pool) is served the same way as a 256-pixel one.
 
 SPDX-License-Identifier: MIT
 """
@@ -140,7 +142,7 @@ def serve(port, pk, blocks, count, quiet, once=False):
                 # there is no map out there -- and it keeps the line completing.
                 if not quiet:
                     print(f"  L{level} {tx},{ty} is outside the level, answering blank")
-                data = bytes(65536)
+                data = bytes(pk["rec"])
             t0 = time.monotonic()
             for off in range(0, len(data), blocks):
                 piece = data[off:off + blocks]
@@ -207,12 +209,12 @@ def selftest(pack=None, blocks=1024):
                               (0, pk["levels"][0]["tx"] - 1, pk["levels"][0]["ty"] - 1)]:
             data = tile_bytes(pk, level, tx, ty)
             assert data is not None, (level, tx, ty)
-            assert len(data) == 65536, len(data)
+            assert len(data) == pk["rec"], len(data)
             got = bytearray()
             for off in range(0, len(data), blocks):
                 piece = data[off:off + blocks]
                 assert off % 8 == 0 and len(piece) % 8 == 0, (off, len(piece))
-                assert off + len(piece) <= 65536, (off, len(piece))
+                assert off + len(piece) <= pk["rec"], (off, len(piece))
                 f = block(level, tx, ty, off, piece)
                 head = f[4:13]
                 assert head[0] == level and int.from_bytes(head[1:3], "little") == tx

@@ -26,7 +26,9 @@ module tb_maps_stream;
 localparam int OUT_W = 64;
 localparam int OUT_H = 48;
 localparam int SPAN  = OUT_W + 4;
-localparam int TSIZE = 256;                 // pixels across a tile
+localparam int TSIZE = 128;                 // pixels across a tile, as the top builds it
+localparam int TW    = 7;                   // log2 of it
+localparam int TENT  = TSIZE / 2;           // 16-bit entries across a tile row
 localparam int TBITS = 16;                  // log2 of a tile's bytes
 localparam int SLOTS = 64;                  // the top's pool: a window has to fit
 localparam [24:0] POOL = 25'h0010_0000;
@@ -35,10 +37,10 @@ localparam int    LVL_W = 768, LVL_H = 768; // three tiles by three
 // The level below is half the size, as the pack's levels are: a request for a
 // tile outside a level's own grid cannot be answered by anything, so the bench
 // counts them.
-localparam int    LVL_GRID_X = (LVL_W + 255) / 256;
-localparam int    LVL_GRID_Y = (LVL_H + 255) / 256;
-localparam int    CRS_GRID_X = (LVL_W / 2 + 255) / 256;
-localparam int    CRS_GRID_Y = (LVL_H / 2 + 255) / 256;
+localparam int    LVL_GRID_X = (LVL_W + TSIZE - 1) / TSIZE;
+localparam int    LVL_GRID_Y = (LVL_H + TSIZE - 1) / TSIZE;
+localparam int    CRS_GRID_X = (LVL_W / 2 + TSIZE - 1) / TSIZE;
+localparam int    CRS_GRID_Y = (LVL_H / 2 + TSIZE - 1) / TSIZE;
 localparam int    TILE_RETRY_TB = 200;      // the epoch, short enough to watch
 
 reg clk = 1'b0;
@@ -59,7 +61,7 @@ function automatic [7:0] tile_byte(input [1:0] lvl, input [14:0] tx,
     tile_byte = ((tx * 8'd41) + (ty * 8'd17) + (lvl * 8'd7) + (off * 8'd13)) & 8'hFF;
 endfunction
 
-reg [7:0] pool [0:SLOTS*65536-1];
+reg [7:0] pool [0:SLOTS*TSIZE*TSIZE-1];
 
 // ------------------------------------------------------------------ DUTs -----
 wire        rd_start;
@@ -114,7 +116,7 @@ wire [14:0] miss_tx, miss_ty;
 wire        lk_hit;
 wire [24:0] lk_addr;
 
-maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TSIZE), .TENT(128), .TW(8)) u_seq (
+maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TSIZE), .TENT(TENT), .TW(TW)) u_seq (
     .clk(clk), .resetn(resetn),
     .start(seq_start), .level(seq_level), .row(seq_row), .entry0(seq_entry),
     .span(seq_span),
@@ -133,7 +135,7 @@ reg  [1:0]  fill_level = 2'd0;
 reg  [14:0] fill_tx = 15'd0, fill_ty = 15'd0;
 wire [24:0] fill_addr;
 
-maps_tiles #(.SLOTS(SLOTS), .TBITS(TBITS), .POOL_BASE(POOL)) u_tiles (
+maps_tiles #(.SLOTS(SLOTS), .TBYTES(TSIZE * TSIZE), .TBITS(14), .POOL_BASE(POOL)) u_tiles (
     .clk(clk), .resetn(resetn),
     .lk_valid(lk_valid), .lk_level(seq_level), .lk_tx(lk_tx), .lk_ty(lk_ty),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
@@ -251,7 +253,7 @@ begin
     @(posedge clk);
     #1;
     base = fill_addr - POOL;
-    for (di = 0; di < 65536; di = di + 1)
+    for (di = 0; di < TSIZE * TSIZE; di = di + 1)
         pool[base + di] = tile_byte(lvl, tx, ty, di);
     @(negedge clk);
     dl_commit = 1'b1;
@@ -292,12 +294,12 @@ begin
             // slot, a wrong offset or a mixed line.
             scol = (src_x0 >>> 16) + out_x;
             srow = (src_y0 >>> 16) + row;
-            exp_f = tile_byte(LVL, scol[14:8], srow[14:8],
-                              ((srow[7:0]) * 256) + scol[7:0]);
+            exp_f = tile_byte(LVL, scol[14:TW], srow[14:TW],
+                              ((srow[TW-1:0]) * TSIZE) + scol[TW-1:0]);
             ccol = scol >> 1;
             crow = srow >> 1;
-            exp_c = tile_byte(LVL + 2'd1, ccol[14:8], crow[14:8],
-                              ((crow[7:0]) * 256) + ccol[7:0]);
+            exp_c = tile_byte(LVL + 2'd1, ccol[14:TW], crow[14:TW],
+                              ((crow[TW-1:0]) * TSIZE) + ccol[TW-1:0]);
             if (out_idx !== exp_f)   bad_fine   = bad_fine + 1;
             if (out_idx !== exp_c)   bad_coarse = bad_coarse + 1;
             if (dbg && out_x < 6)
@@ -358,7 +360,7 @@ initial begin
     resetn = 1'b1;
     repeat (4) @(posedge clk);
 
-    for (n = 0; n < SLOTS*65536; n = n + 1) pool[n] = 8'h00;
+    for (n = 0; n < SLOTS*TSIZE*TSIZE; n = n + 1) pool[n] = 8'h00;
 
     // palette: identity, so a pixel's index is its own colour and this bench can
     // judge what comes out

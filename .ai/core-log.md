@@ -1509,3 +1509,37 @@ Deploy this and repeat the two hardware tests: level 3 should still be clean, an
 - User Test: NOT RUN
 
 ---
+
+## 44 COMMIT Unreleased 2026-10-27T15:34:22-07:00
+
+#### Coming From:
+
+Unreleased 331dbfb
+
+#### Purpose:
+
+Fit a screen's working set into the tile pool, which is what the hardware showed was actually wrong.
+
+#### Outcome:
+
+Four bits a pixel was the obvious way to halve the tiles and it was the wrong lever, so it was not built: a four-bit index reaches sixteen colours, which means either one sixteen-colour palette for the whole map -- visibly worse than what is on the screen now -- or a palette per tile, and then the fabric needs a palette per tile and the pixel path has to blend across an entry boundary, because a sixteen-bit entry would hold four pixels instead of two. A 128-pixel tile at eight bits gets four times the slots with none of that cost: 16 KiB a tile, 256 slots in the same four megabytes, the same 256-entry palette, and the pixel path's arithmetic untouched -- an entry still holds two pixels and only the row stride changed, which was already a parameter of `maps_tile_addr`. `tools/maps_pack.py tiles --bits=8 --tile=128` writes the pack, since the tile size had been a constant of the tool rather than a property of a run: 1777 tiles over four levels in 27.77 MiB, verified tile by tile against its source, worst 6.4/255. `serve_tiles.py` takes the tile size from the pack's header, so a 128-pixel pack is served the same way as a 256-pixel one, 16 blocks a tile instead of 64. The top builds `TILE_PX=128` with 64 entries a row, fourteen bits of pool address and 256 slots. `sim/tb_maps_stream.sv` follows the same geometry, and its out-of-grid counter had to learn the tile size too -- it was still dividing by 256 and called five legitimate requests illegal. A z15 screen now wants about sixty fine tiles and fifteen coarse ones, seventy-five of two hundred and fifty-six slots, where before it wanted fifty-two of sixty-four: the difference between a pool that recycles slots the line is about to read and one that does not. Seventeen of seventeen testbenches pass with `check_render` and `check_tmds`, and eight of eight seeds pack from 77.35 to 86.26 MHz. Nothing was deployed; the user asked to wait for a go-ahead, and the board still runs `tinymaps.d09f77f17dd5.bin`. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy on the user's word and repeat the level-3, level-1 and level-0 tests, then pan: the finest level should now hold its working set, which is the first time that is true. If the picture is clean, the remaining work is the request queue's pending set -- it still asks two or three times for a tile already on its way -- and then prefetch and eviction, which need the pool to say when it is full. Four bits a pixel stays available as a later saving, but only with a palette per tile and a pixel path that can blend across entries.
+
+#### Files Modified:
+
+- docs/streaming-scope.md
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_stream.sv
+- tools/maps_pack.py
+- tools/serve_tiles.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

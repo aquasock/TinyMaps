@@ -219,10 +219,10 @@ def pack(ls):
 # corner, so a level crossing stays a doubling of the coordinates.
 
 THDR, TENT = 68, 40
-TSIZE = 256
+TSIZE = 256                     # default; --tile overrides it for one run
 
 
-def tile_shape(bits):
+def tile_shape(bits, size=None):
     """(palette bytes in a record, payload bytes, record bytes) for a pack.
 
     Four bits per pixel carries its own sixteen-colour palette in every record,
@@ -231,14 +231,15 @@ def tile_shape(bits):
     which is the table the fabric's pixel path already reads, so a record is
     nothing but the tile's own bytes.
     """
+    t = TSIZE if size is None else size
     if bits == 4:
-        return 48, TSIZE * TSIZE // 2, 48 + TSIZE * TSIZE // 2
+        return 48, t * t // 2, 48 + t * t // 2
     if bits == 8:
-        return 0, TSIZE * TSIZE, TSIZE * TSIZE
+        return 0, t * t, t * t
     raise ValueError(f"{bits} bits per pixel is not a pack this tool writes")
 
 
-def padded_mosaic(l):
+def padded_mosaic(l, size=None):
     """the level's raster padded up to whole tiles, with the grid it needs.
 
     A level's width and height are not multiples of the tile size -- L3 is
@@ -246,38 +247,40 @@ def padded_mosaic(l):
     part nothing.  Padding to whole tiles keeps every record 256x256 and puts the
     filler outside the level, where the renderer's clamp never looks.
     """
+    t = TSIZE if size is None else size
     im = mosaic(l)
-    gx = (l['width'] + TSIZE - 1) // TSIZE
-    gy = (l['height'] + TSIZE - 1) // TSIZE
-    out = Image.new("RGB", (gx * TSIZE, gy * TSIZE), (0, 0, 0))
+    gx = (l['width'] + t - 1) // t
+    gy = (l['height'] + t - 1) // t
+    out = Image.new("RGB", (gx * t, gy * t), (0, 0, 0))
     out.paste(im, (0, 0))
     return out, gx, gy
 
 
-def tile_records(ls, bits):
+def tile_records(ls, bits, size=None):
     """(records, shared palette or None) for every tile, level order, row-major
     within a level"""
-    _pal, _pay, rec = tile_shape(bits)
+    t = TSIZE if size is None else size
+    _pal, _pay, rec = tile_shape(bits, t)
     out = []
     shared = None
     palimg = None
     if bits == 8:
         # one palette for the pack, cut from a sample of every level, so a tile
         # is drawn through the table the fabric already has loaded
-        shared = build_palette([padded_mosaic(l)[0] for l in ls])
+        shared = build_palette([padded_mosaic(l, t)[0] for l in ls])
         palimg = Image.new("P", (1, 1)); palimg.putpalette(shared)
     for l in ls:
-        im, gx, gy = padded_mosaic(l)
+        im, gx, gy = padded_mosaic(l, t)
         for ty in range(gy):
             for tx in range(gx):
-                box = (tx * TSIZE, ty * TSIZE, (tx + 1) * TSIZE, (ty + 1) * TSIZE)
-                t = im.crop(box)
+                box = (tx * t, ty * t, (tx + 1) * t, (ty + 1) * t)
+                tile = im.crop(box)
                 if bits == 8:
-                    q = t.quantize(palette=palimg, dither=Image.NONE)
+                    q = tile.quantize(palette=palimg, dither=Image.NONE)
                     out.append((b"", np.asarray(q, np.uint8).tobytes()))
                 else:
-                    q = t.quantize(colors=16, method=Image.MEDIANCUT,
-                                   dither=Image.NONE)
+                    q = tile.quantize(colors=16, method=Image.MEDIANCUT,
+                                      dither=Image.NONE)
                     pal = bytes(q.getpalette()[:48]).ljust(48, b"\0")
                     idx = np.asarray(q, np.uint8)
                     assert idx.max() < 16, (idx.max(), tx, ty)
@@ -288,14 +291,15 @@ def tile_records(ls, bits):
     return out, shared
 
 
-def pack_tiles(ls, out_path, bits=4):
-    _pbytes, _pay, TREC = tile_shape(bits)
-    recs, shared = tile_records(ls, bits)
+def pack_tiles(ls, out_path, bits=4, size=None):
+    t = TSIZE if size is None else size
+    _pbytes, _pay, TREC = tile_shape(bits, t)
+    recs, shared = tile_records(ls, bits, t)
     first = []
     grids = []
     n = 0
     for l in ls:
-        _im, gx, gy = padded_mosaic(l)
+        _im, gx, gy = padded_mosaic(l, t)
         grids.append((gx, gy))
         first.append(n)
         n += gx * gy
@@ -309,7 +313,7 @@ def pack_tiles(ls, out_path, bits=4):
 
     hdr = bytearray(THDR)
     struct.pack_into("<4sHHIBBHIIII", hdr, 0, b"TMTL", 2 if bits == 8 else 1, len(ls),
-                     TSIZE, bits, (256 if bits == 8 else 16) % 256, 0,
+                     t, bits, (256 if bits == 8 else 16) % 256, 0,
                      _pay, TREC, data_off, data_off + len(body))
     hdr[36:68] = f"Phoenix metro tiles {bits}bpp".encode().ljust(32, b"\0")[:32]
 
@@ -342,11 +346,12 @@ def read_tiles(p):
     magic, ver, nlev, tsz, bits, pal, _z, pay, rec, doff, total = \
         struct.unpack_from("<4sHHIBBHIIII", b, 0)
     assert magic == b"TMTL", magic
-    pbytes, pay, rec = tile_shape(bits)
+    # the tile size comes out of the pack, so a 128-pixel pack reads correctly
+    pbytes, pay, rec = tile_shape(bits, tsz)
     # the palette count is one byte, so a 256-entry table is written as zero
     pal_entries = pal if pal else 256
-    assert tsz == TSIZE and pal_entries == (256 if bits == 8 else 16), \
-        (tsz, bits, pal_entries)
+    assert 64 <= tsz <= 512 and not (tsz & (tsz - 1)), tsz
+    assert pal_entries == (256 if bits == 8 else 16), (tsz, bits, pal_entries)
     assert rec == struct.unpack_from("<I", b, 20)[0] and total == len(b), (rec, total, len(b))
     table_end = THDR + TENT * nlev
     # the shared palette, if this pack has one, sits between the level table and
@@ -361,7 +366,7 @@ def read_tiles(p):
         tx, ty, z, mpp, ox, oy, first, _r = struct.unpack_from("<IIIIiiII", b, THDR + TENT * i)
         lvs.append(dict(level=i, tx=tx, ty=ty, zoom=z, mpp=mpp / 65536, ox=ox, oy=oy, first=first))
     return dict(levels=lvs, data=b[doff:total], name=b[36:68].rstrip(b"\0").decode(),
-                bits=bits, rec=rec, pbytes=pbytes, pal=share)
+                bits=bits, rec=rec, pbytes=pbytes, pal=share, tsize=tsz)
 
 
 def verify_tiles(p):
@@ -377,23 +382,24 @@ def verify_tiles(p):
     else:
         print(f"  origins differ: {sorted(origins)}")
         ok = False
+    TS = pk['tsize']
     for lv, l in zip(pk['levels'], ls):
         n = lv['tx'] * lv['ty']
-        im = np.asarray(padded_mosaic(l)[0], np.int16)
+        im = np.asarray(padded_mosaic(l, TS)[0], np.int16)
         bad = worst = 0
         for k in range(n):
             off = (lv['first'] + k) * TREC
             if pk['bits'] == 8:
                 pal = np.frombuffer(pk['pal'], np.uint8).reshape(256, 3)
                 idx = np.frombuffer(pk['data'][off:off + TREC], np.uint8)
-                assert idx.size == TSIZE * TSIZE, (idx.size, k)
+                assert idx.size == TS * TS, (idx.size, k)
             else:
                 pal = np.frombuffer(pk['data'][off:off + pk['pbytes']],
                                     np.uint8).reshape(16, 3)
                 px = np.frombuffer(pk['data'][off + pk['pbytes']:off + TREC], np.uint8)
-                assert px.size == TSIZE * TSIZE // 2, (px.size, k)
+                assert px.size == TS * TS // 2, (px.size, k)
                 hi, lo = px >> 4, px & 0x0F
-                idx = np.empty(TSIZE * TSIZE, np.uint8)
+                idx = np.empty(TS * TS, np.uint8)
                 idx[0::2], idx[1::2] = hi, lo
                 if idx.max() >= 16:
                     bad += 1
@@ -401,9 +407,9 @@ def verify_tiles(p):
             # decode and compare against the tile this record claims to be: a
             # transposed or shifted tile is well formed and wrong, and only this
             # catches it
-            got = pal[idx.reshape(TSIZE, TSIZE)].astype(np.int16)
+            got = pal[idx.reshape(TS, TS)].astype(np.int16)
             tx, ty = k % lv['tx'], k // lv['tx']
-            src = im[ty * TSIZE:(ty + 1) * TSIZE, tx * TSIZE:(tx + 1) * TSIZE]
+            src = im[ty * TS:(ty + 1) * TS, tx * TS:(tx + 1) * TS]
             mean = float(np.abs(got - src).mean())
             worst = max(worst, mean)
             if mean > 12.0:            # 16 colours on aerial imagery
@@ -436,16 +442,21 @@ def main():
         # palette, because that is the table its pixel path already has; four
         # bits a pixel with a palette per tile is the smaller pack and waits for
         # the pixel path to learn about nibbles.
-        bits = 4
+        bits, size = 4, 256
         args = [a for a in sys.argv[2:] if not a.startswith("--")]
         for a in sys.argv[2:]:
             if a.startswith("--bits="):
                 bits = int(a.split("=", 1)[1])
+            if a.startswith("--tile="):
+                size = int(a.split("=", 1)[1])
         if bits not in (4, 8):
             print(f"--bits must be 4 or 8, not {bits}")
             return 2
-        out = args[0] if args else f"work/pack/phoenix-18km-{bits}bpp.tmtl"
-        return pack_tiles(ls, out, bits)
+        if size < 64 or size > 512 or size & (size - 1):
+            print(f"--tile must be a power of two from 64 to 512, not {size}")
+            return 2
+        out = args[0] if args else f"work/pack/phoenix-18km-{bits}bpp-{size}.tmtl"
+        return pack_tiles(ls, out, bits, size)
     if cmd == "verify-tiles": return verify_tiles(sys.argv[2])
     if cmd == "extract":
         # the raw eight-bit raster of one level, for tools/load_image.py

@@ -401,6 +401,21 @@ testbench than from a rebuilt renderer.
   hash to slot 6).  Sixty-four 64 KiB slots is not enough.  Half-size tiles are:
   at 4bpp the same 4 MiB holds 128 slots, which makes a 52-tile working set
   comfortable, so 4bpp moves from "someday" to the next thing that matters.
+- **Done: quarter-size tiles, which is what the pool actually needed.**  Four bits
+  a pixel was the obvious way to halve the bytes and it was the wrong one: a
+  four-bit index reaches sixteen colours, so either the whole map shares a sixteen
+  colour palette or every tile keeps its own -- and then the fabric needs a
+  palette per tile and the pixel path has to blend across an entry boundary,
+  because an entry would hold four pixels instead of two.  A **128-pixel tile at
+  eight bits** gets four times the slots with none of that: 16 KiB a tile, 256
+  slots in the same four megabytes, the same palette, and the pixel path's
+  arithmetic untouched -- an entry still holds two pixels and only the row stride
+  changed, which was already a parameter.  `maps_pack.py tiles --bits=8 --tile=128`
+  writes it: 1777 tiles in 27.77 MiB, verified tile by tile against its source,
+  worst 6.4/255.  A z15 screen now wants about sixty fine tiles and fifteen coarse
+  ones, seventy-five of two hundred and fifty-six slots, where before it wanted
+  fifty-two of sixty-four.  That is the difference between a pool that recycles
+  slots the line is about to read and one that does not.
 - **Still open:** the request queue asking two or three times for a tile already
   on its way, prefetch and eviction.  Also: the switch-mid-fetch repair
   is **not** covered by simulation -- the bench passes with the guard and without
