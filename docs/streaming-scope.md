@@ -286,10 +286,23 @@ testbench than from a rebuilt renderer.
   empty pool at boot means every line stalls on its retry timer and the screen
   shows nothing -- worse than not streaming at all.  The fallback is what turns it
   on, so it is the next piece.
-- **Next: the coarse fallback** -- a line whose fine tile is missing should be
-  drawn from the coarser level, which stays resident -- and then `TILED` on in the
-  top with the sequencer and the request queue instantiated beside the table.
-  Then prefetch and eviction, then 4bpp in the pixel path.
+- **Done: the coarse fallback.** A line whose own level cannot answer is drawn
+  from the level below, and the way it is done is deliberately dull: the coarse
+  pass takes the row, the window's first entry and the pixel's position as the
+  fine ones halved, so two output pixels share one coarse pixel and the pixel
+  pipeline is untouched -- it magnifies by any step already.  A row buffer
+  remembers which level it came from, a line only mixes rows that agree, and a
+  buffer only satisfies a row if the level matches, because otherwise a coarse
+  row would satisfy a fine line for ever: the epoch would end, the picture would
+  ask for its own level, and every buffer would say it already had that row.
+  `TILE_RETRY` clocks after the first miss the epoch ends at a line boundary, the
+  next line tries the view's own level again, and the picture sharpens when that
+  fetch lands -- which is "sharp where you stay, soft while you move" falling out
+  of the same machinery.
+- **Next: `TILED` on in the top.** The sequencer, the page table and the request
+  queue get instantiated beside the renderer, the retry and the fallback stop
+  being unreachable code, and the board streams.  Then prefetch and eviction,
+  which need the pool to report when it is full, and 4bpp in the pixel path.
 
 **A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
 At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the

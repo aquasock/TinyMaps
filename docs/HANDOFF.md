@@ -320,9 +320,12 @@
   line drawing the level's own pixels afterwards.  Doing that found a permanent
   stall: a missed fetch left the blocking path waiting for an acknowledgement that
   a miss never gives, so the line engine stopped for good; a retry timer now reasks
-  after `TILE_RETRY` clocks.  `TILED` stays off in the top because without a coarse
-  fallback an empty pool at boot would stall every line.  See
-  `docs/streaming-scope.md`.
+  after `TILE_RETRY` clocks.  The coarse fallback exists now, which was the other
+  thing tiling needed: a line whose own level cannot answer is drawn from the
+  level below, two output pixels per coarse pixel, and it sharpens when the tile
+  arrives, on a `TILE_RETRY` epoch.  `TILED` is still off in the top -- turning it
+  on is the next cycle, with the sequencer and the request queue instantiated
+  beside the renderer.  See `docs/streaming-scope.md`.
 
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The

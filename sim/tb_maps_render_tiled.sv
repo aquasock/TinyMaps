@@ -51,6 +51,7 @@ wire [15:0] fetch_count;
 reg pal_we = 0; reg [7:0] pal_idx = 0; reg [23:0] pal_data = 0;
 
 // tile mode's own ports
+wire [1:0]  seq_level;
 wire        seq_start;
 wire [13:0] seq_entry;
 wire [11:0] seq_row;
@@ -80,6 +81,7 @@ maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN), .TILED(1'b1)) dut (
     .fetch_count(fetch_count),
     .out_x(out_x), .out_rgb(out_rgb), .out_idx(out_idx), .out_valid(out_valid),
     .tile_level(2'd0),
+    .seq_level(seq_level),
     .seq_start(seq_start), .seq_entry(seq_entry),
     .seq_row(seq_row), .seq_span(seq_span),
     .seq_we(seq_we), .seq_widx(seq_widx), .seq_wdata(seq_wdata),
@@ -88,7 +90,7 @@ maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN), .TILED(1'b1)) dut (
 
 maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TSIZE), .TENT(TENT), .TW(8)) u_seq (
     .clk(clk), .resetn(resetn),
-    .start(seq_start), .level(2'd0), .row(seq_row), .entry0(seq_entry),
+    .start(seq_start), .level(seq_level), .row(seq_row), .entry0(seq_entry),
     .span(seq_span),
     .busy(), .done(seq_done), .miss(seq_miss),
     .we(seq_we), .widx(seq_widx), .wdata(seq_wdata),

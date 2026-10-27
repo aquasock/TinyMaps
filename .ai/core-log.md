@@ -1259,3 +1259,38 @@ The coarse fallback, which is the last thing between this and tiling on the boar
 - User Test: NOT RUN
 
 ---
+
+## 37 COMMIT Unreleased 2026-10-27T08:32:11-07:00
+
+#### Coming From:
+
+Unreleased eeb08d9
+
+#### Purpose:
+
+Draw a line whose tile has not arrived from the level below instead of stalling on it, which is the last piece tiling needs before it can be turned on in the top.
+
+#### Outcome:
+
+`maps_render` now has a coarse fallback, and the way it is done is deliberately dull: the coarse pass takes the row, the window's first entry and the pixel's own position as the fine ones halved, so two output pixels share one coarse pixel and the pixel pipeline is untouched -- it already magnifies by any step. `seq_level` became an output so the sequencer is asked about the level the line is actually being drawn from. Each row buffer remembers which level it came from, a line only mixes rows that agree, and a buffer only satisfies a row if the level matches. That last condition was the one that had to be found by experiment: without it a coarse row satisfied a fine line for ever, because the epoch would end, the picture would ask for its own level, and every buffer would answer that it already had that row, so the picture stayed soft with no misses and no requests. A miss at the view's own level now sets the fallback and starts the retry epoch; when the epoch ends at a line boundary the next line tries the view's own level again and the picture sharpens when that fetch lands, which is "sharp where you stay, soft while you move" falling out of the same machinery rather than a second mode. `sim/tb_maps_stream.sv` now judges a line as legitimate in exactly two forms -- the view's own level, or the level below with each pixel covering two by two -- and adds two scenarios: a view whose fine tiles were never sent must draw coarse and exact, and fine tiles that arrive late must sharpen the picture within an epoch. Both pass, and so does the earlier loop. Two bugs in the testbench were found on the way: it tied the page table's lookup level to a constant, so a coarse tile could never be found once the sequencer asked for one, and its settle loop treated only the fine level as success. Seventeen of seventeen testbenches pass with `check_render` and `check_tmds`, and eight of eight seeds pack from 80.01 to 84.83 MHz. `TILED` is still off in the top, so none of this is in the bitstream and nothing was deployed. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Turn `TILED` on in the top: instantiate the sequencer, the page table and the request queue beside the renderer, wire the sequencer's level from `seq_level` and its miss to the request queue, give the queue the link's transmitter with the loader's answers ahead of it, and give the loader the pool's address. That is the cycle where the retry and the fallback stop being unreachable code and the board streams, and it needs a hardware test on a view whose tiles are not resident. After that, prefetch and eviction, which need the pool to report when it is full, and 4bpp in the pixel path.
+
+#### Files Modified:
+
+- README.md
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_render.sv
+- sim/tb_maps_render_tiled.sv
+- sim/tb_maps_stream.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

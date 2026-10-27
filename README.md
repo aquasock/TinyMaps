@@ -367,6 +367,15 @@ are kept: two are read for the current line and the third is prefetched during
 it. The testbench checks `fetch_count`, which exposes whether row reuse and the
 overlapped prefetch are actually happening rather than silently falling back.
 
+With `TILED` the line may also be drawn from the level below, which is what a
+tile that has not arrived looks like: the coarse pass takes the row, the window's
+first entry and the pixel's own position as the fine ones halved, so two output
+pixels share one coarse pixel and nothing in the pixel pipeline changes. A buffer
+remembers which level it came from, and a line only mixes rows that agree, so a
+picture is never half sharp and half soft. After `TILE_RETRY` clocks the epoch
+ends, the next line asks for the view's own level again, and the picture sharpens
+when that fetch lands.
+
 `step_x` and `step_y` are source pixels per output pixel, so **magnifying means
 step below 1**. The level selector must keep them in `(0.5, 1]`: above 1 a source
 row can advance by two per output line, consecutive line pairs share no row, and

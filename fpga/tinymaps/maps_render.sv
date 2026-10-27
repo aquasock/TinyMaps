@@ -16,6 +16,15 @@
 // fetch of both rows, which costs more than one line period; that is one line
 // per frame or per gesture, not per line.
 //
+// The coarse fallback.  A tile that is not in the pool is not a stall and not a
+// hole in the picture: the line is drawn from the next level down, which is
+// resident, and sharpens when the tile arrives.  The cheap way to say that is a
+// viewport at half the scale -- the coarse level's row is the fine row over two,
+// its entry is the fine entry over two, and two output pixels share one coarse
+// pixel -- and since the renderer already magnifies by any step, all that changes
+// is where the row, the window and the parity come from.  Nothing in the pixel
+// pipeline knows: it is still one row of entries, read the same way.
+//
 // Cost per output pixel: two block RAM reads (one per row), three 8x16
 // multiplies, one palette read.  Per output line: SPAN entry fetches, overlapped
 // with the OUT_W emits.
@@ -89,7 +98,10 @@ module maps_render #(
     // reads it in per-tile chunks and hands back one entry at a time.  The linear
     // path stays exactly as it was for TILED=0, so the module can be built both
     // ways and the two compared.
-    input  wire [1:0]  tile_level,
+    input  wire [1:0]  tile_level,     // the finest level the view is over
+    // the level the sequencer is being asked about: the view's own, or the one
+    // below it when the line is being drawn from the fallback
+    output wire [1:0]  seq_level,
     output reg         seq_start,
     output reg  [13:0] seq_entry,
     output wire [11:0] seq_row,
@@ -178,6 +190,12 @@ reg [AIDX-1:0] f_j;
 reg [31:0] f_row, f_col;
 reg        f_missed;                  // a fetch was refused by the pool
 reg [20:0] retry_cnt;                 // and this is how long before it asks again
+
+// The fallback: `cfall` is the scale the picture is being drawn at, and the
+// buffers remember which scale their contents are, because a line may only mix
+// rows that came from the same level.
+reg        cfall;
+reg  [2:0] bcrs;                      // per row buffer: fetched from the level below
 reg [24:0] f_base;
 reg [15:0] f_cnt;
 
@@ -226,10 +244,27 @@ reg  [31:0] r_ok, r_pf;
 // add chain into f_base inside one clock, which is what the critical path became
 // once the row pair moved out of it.
 reg  [31:0] r_addr;
-wire        pf_want = !(bval[0] && brow[0] == r_pf) &&
-                      !(bval[1] && brow[1] == r_pf) &&
-                      !(bval[2] && brow[2] == r_pf);
+// A buffer satisfies a row only if it also came from the level the picture is
+// being drawn at.  Without the scale here a coarse row would satisfy a fine
+// line for ever: the epoch would end, the picture would ask for the view's own
+// level, and every buffer would say "I already have that row".
+wire        pf_want = !(bval[0] && brow[0] == r_pf && bcrs[0] == cfall) &&
+                      !(bval[1] && brow[1] == r_pf && bcrs[1] == cfall) &&
+                      !(bval[2] && brow[2] == r_pf && bcrs[2] == cfall);
 wire [31:0] e_now  = (acc_x + 32'd65536) >>> 17;
+// the coarse pass works in half-scale coordinates: the row, the window's first
+// entry and the pixel's own position are all the fine ones halved.  r0/r_ok/r_pf
+// and brow stay in fine units -- they name the source row the picture wants, not
+// the row the bytes came from.
+wire [31:0] r0_e   = cfall ? (r0   >> 1) : r0;
+wire [31:0] r_ok_e = cfall ? (r_ok >> 1) : r_ok;
+wire [31:0] r_pf_e = cfall ? (r_pf >> 1) : r_pf;
+wire [31:0] k0_e   = cfall ? (k0_pf >> 1) : k0_pf;
+wire [15:0] cnt_e  = cfall ? ((SPAN[15:0] >> 1) + 16'd2) : SPAN[15:0];
+wire [31:0] x_e    = bcrs[cur] ? (acc_x >> 1) : acc_x;
+wire [31:0] e_new  = (x_e + 32'd65536) >>> 17;
+
+assign seq_level = cfall ? (tile_level - 2'd1) : tile_level;
 wire [31:0] k0_now = (src_x0 + 32'd65536) >>> 17;
 // the window starts one entry early so the first pixel's previous entry is real
 wire [31:0] k0_pf  = (k0_now == 32'd0) ? 32'd0 : k0_now - 32'd1;
@@ -246,6 +281,7 @@ always @(posedge clk or negedge resetn) begin
         bval <= 3'b000; col_tag <= 32'hFFFFFFFF;
         f_req <= 1'b0; f_busy <= 1'b0; f_ack <= 1'b0; f_buf <= 2'd0;
         f_missed <= 1'b0; retry_cnt <= 21'd0; block_retry <= 3'd0;
+        cfall <= 1'b0; bcrs <= 3'b000;
         f_j <= {AIDX{1'b0}}; f_row <= 32'd0; f_col <= 32'd0;
         f_base <= 25'd0; f_cnt <= 16'd0;
         p1_v <= 1'b0; p1_odd <= 1'b0; p1_bil <= 1'b0; p1_x <= 12'd0;
@@ -264,6 +300,7 @@ always @(posedge clk or negedge resetn) begin
         out_valid <= 1'b0;
         p1_v     <= 1'b0;
         rd_start <= 1'b0;
+        if (retry_cnt != 21'd0) retry_cnt <= retry_cnt - 21'd1;
         seq_start <= 1'b0;
         f_ack    <= 1'b0;
 
@@ -282,7 +319,17 @@ always @(posedge clk or negedge resetn) begin
                 fetch_count <= fetch_count + 16'd1;
                 bval[f_buf] <= 1'b1;
                 brow[f_buf] <= f_row;
+                bcrs[f_buf] <= cfall;
                 col_tag     <= f_col;
+            end else if (src_miss && !cfall && tile_level != 2'd0) begin
+                // the view's own level could not answer: draw this line from the
+                // level below, which is the whole point of the fallback, and let
+                // the retry timer bring the fine attempt back
+                f_busy      <= 1'b0;
+                f_missed    <= 1'b1;
+                cfall       <= 1'b1;
+                retry_cnt   <= TILE_RETRY[20:0];
+                tile_misses <= tile_misses + 16'd1;
             end else if (src_miss) begin
                 // the tile is not in the pool: leave the row unmarked, so the
                 // line engine does not treat it as landed, count it, and start
@@ -300,7 +347,7 @@ always @(posedge clk or negedge resetn) begin
             f_busy <= 1'b1;
             f_j    <= {AIDX{1'b0}};
             if (TILED) begin
-                seq_entry <= k0_pf[13:0];
+                seq_entry <= k0_e[13:0];
                 seq_start <= 1'b1;
             end else begin
                 rd_start <= 1'b1;
@@ -338,6 +385,11 @@ always @(posedge clk or negedge resetn) begin
         case (st)
         S_IDLE: if (cy != cy_d) begin
             cy_d <= cy;
+            // the epoch ends at a line boundary, not mid-line: the next line
+            // tries the view's own level again and falls back once more if it is
+            // still not there.  The counter runs down on its own, whether or not
+            // anything is waiting on it.
+            if (retry_cnt == 21'd0) cfall <= 1'b0;
             if (cy == 0) begin
                 r0    <= src_y0 >>> 16;
                 wy    <= bilinear ? src_y0[15:0] : 16'd0;
@@ -365,22 +417,24 @@ always @(posedge clk or negedge resetn) begin
             r1 <= r_ok;
             k0 <= k0_pf;
             if (win_ok && bval[cur] && brow[cur] == r0 &&
-                bval[nxt] && brow[nxt] == r_ok) begin
+                bval[nxt] && brow[nxt] == r_ok &&
+                bcrs[cur] == cfall && bcrs[nxt] == cfall) begin
                 // pair present: prefetch the third row while this line draws
                 if (!f_busy && !f_req && pf_want) begin
-                    f_req  <= 1'b1; f_buf <= fre; f_row <= r_pf; f_cnt <= SPAN;
-                    f_col  <= k0_pf;
+                    f_req  <= 1'b1; f_buf <= fre; f_row <= r_pf_e; f_cnt <= cnt_e;
+                    f_col  <= k0_e;
                     f_base <= level_base + r_addr + {1'b0, k0_pf[22:0], 1'b0};
                 end
                 emit_x <= 16'd0; acc_x <= src_x0; rd_idx <= {AIDX{1'b0}};
                 st <= S_EMIT;
             end else if (win_ok && bval[nxt] && brow[nxt] == r0 &&
-                         bval[fre] && brow[fre] == r_ok) begin
+                         bval[fre] && brow[fre] == r_ok &&
+                         bcrs[nxt] == cfall && bcrs[fre] == cfall) begin
                 // one line on: rotate; the prefetched row becomes this line's second
                 cur <= nxt; nxt <= fre; fre <= cur;
                 if (!f_busy && !f_req && pf_want) begin
-                    f_req  <= 1'b1; f_buf <= cur; f_row <= r_pf; f_cnt <= SPAN;
-                    f_col  <= k0_pf;
+                    f_req  <= 1'b1; f_buf <= cur; f_row <= r_pf_e; f_cnt <= cnt_e;
+                    f_col  <= k0_e;
                     f_base <= level_base + r_addr + {1'b0, k0_pf[22:0], 1'b0};
                 end
                 emit_x <= 16'd0; acc_x <= src_x0; rd_idx <= {AIDX{1'b0}};
@@ -396,8 +450,8 @@ always @(posedge clk or negedge resetn) begin
         S_BFETCH: begin
             case (block_step)
             3'd0: if (!f_busy) begin
-                f_req  <= 1'b1; f_buf <= 2'd0; f_row <= r0; f_cnt <= SPAN;
-                f_col  <= k0_pf;
+                f_req  <= 1'b1; f_buf <= 2'd0; f_row <= r0_e; f_cnt <= cnt_e;
+                f_col  <= k0_e;
                 f_base <= level_base + (r0 * level_w) + {1'b0, k0_pf[22:0], 1'b0};
                 block_step <= 3'd1;
             end
@@ -406,8 +460,9 @@ always @(posedge clk or negedge resetn) begin
                                           block_retry <= 3'd0; block_step <= 3'd7; end
             3'd2: block_step <= 3'd3;               // one clear cycle between requests
             3'd3: if (!f_busy) begin
-                f_req  <= 1'b1; f_buf <= 2'd1; f_row <= r1; f_cnt <= SPAN;
-                f_col  <= k0_pf;
+                f_req  <= 1'b1; f_buf <= 2'd1; f_row <= (cfall ? (r1 >> 1) : r1);
+                f_cnt  <= cnt_e;
+                f_col  <= k0_e;
                 f_base <= level_base + (r1 * level_w) + {1'b0, k0_pf[22:0], 1'b0};
                 block_step <= 3'd4;
             end
@@ -423,8 +478,8 @@ always @(posedge clk or negedge resetn) begin
             // pan; paying for the fetch here costs one row on the single line
             // that had to block anyway.
             3'd5: if (!f_busy && !f_req) begin
-                f_req  <= 1'b1; f_buf <= 2'd2; f_row <= r_pf; f_cnt <= SPAN;
-                f_col  <= k0_pf;
+                f_req  <= 1'b1; f_buf <= 2'd2; f_row <= r_pf_e; f_cnt <= cnt_e;
+                f_col  <= k0_e;
                 f_base <= level_base + r_addr + {1'b0, k0_pf[22:0], 1'b0};
                 block_step <= 3'd6;
             end
@@ -440,21 +495,20 @@ always @(posedge clk or negedge resetn) begin
                 st         <= S_EMIT;
             end
             // wait after a miss, then try the same fetch again
-            3'd7: if (retry_cnt != 21'd0) retry_cnt <= retry_cnt - 21'd1;
-                  else block_step <= block_retry;
+            3'd7: if (retry_cnt == 21'd0) block_step <= block_retry;
             default: st <= S_BFETCH;
             endcase
         end
 
         S_EMIT: begin
-            rd_idx <= (e_now - k0);
+            rd_idx <= (e_new - k0);
             acc_x  <= acc_x + step_x;
 
             p1_v   <= 1'b1;
             p1_x   <= {1'b0, emit_x[10:0]};
-            p1_fx  <= acc_x[15:0];
-            p1_wy  <= wy;
-            p1_odd <= acc_x[16];
+            p1_fx  <= x_e[15:0];
+            p1_wy  <= bcrs[cur] ? (wy >> 1) : wy;
+            p1_odd <= x_e[16];
             p1_bil <= bilinear;
 
             emit_x <= emit_x + 16'd1;

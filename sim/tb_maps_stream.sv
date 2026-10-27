@@ -32,6 +32,7 @@ localparam int SLOTS = 8;
 localparam [24:0] POOL = 25'h0010_0000;
 localparam [1:0]  LVL  = 2'd1;              // the level under test
 localparam int    LVL_W = 768, LVL_H = 768; // three tiles by three
+localparam int    TILE_RETRY_TB = 200;      // the epoch, short enough to watch
 
 reg clk = 1'b0;
 always #6.734 clk = ~clk;
@@ -63,6 +64,8 @@ wire [11:0] out_x;
 wire [23:0] out_rgb;
 wire [7:0]  out_idx;
 wire        out_valid;
+wire [1:0]  seq_level;
+wire [2:0]  dbg_state;
 wire        seq_start;
 wire [13:0] seq_entry;
 wire [11:0] seq_row;
@@ -79,7 +82,7 @@ reg [7:0] pal_idx = 8'd0;
 reg [23:0] pal_data = 24'd0;
 
 maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN), .TILED(1'b1),
-                 .TILE_RETRY(64)) u_render (
+                 .TILE_RETRY(TILE_RETRY_TB)) u_render (
     .clk(clk), .resetn(resetn),
     .src_x0(src_x0), .src_y0(src_y0), .step_x(step_x), .step_y(step_y),
     .bilinear(1'b0),
@@ -88,9 +91,10 @@ maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN), .TILED(1'b1),
     .rd_data(rd_data), .rd_valid(rd_valid),
     .pal_we(pal_we), .pal_idx(pal_idx), .pal_data(pal_data),
     .cx(cx), .cy(cy),
-    .fetch_count(), .dbg_state(),
+    .fetch_count(), .dbg_state(dbg_state),
     .out_x(out_x), .out_rgb(out_rgb), .out_idx(out_idx), .out_valid(out_valid),
     .tile_level(LVL),
+    .seq_level(seq_level),
     .seq_start(seq_start), .seq_entry(seq_entry),
     .seq_row(seq_row), .seq_span(seq_span),
     .seq_we(seq_we), .seq_widx(seq_widx), .seq_wdata(seq_wdata),
@@ -105,7 +109,7 @@ wire [24:0] lk_addr;
 
 maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TSIZE), .TENT(128), .TW(8)) u_seq (
     .clk(clk), .resetn(resetn),
-    .start(seq_start), .level(LVL), .row(seq_row), .entry0(seq_entry),
+    .start(seq_start), .level(seq_level), .row(seq_row), .entry0(seq_entry),
     .span(seq_span),
     .busy(seq_busy), .done(seq_done), .miss(seq_miss),
     .miss_level(miss_level), .miss_tx(miss_tx), .miss_ty(miss_ty),
@@ -124,7 +128,7 @@ wire [24:0] fill_addr;
 
 maps_tiles #(.SLOTS(SLOTS), .TBITS(TBITS), .POOL_BASE(POOL)) u_tiles (
     .clk(clk), .resetn(resetn),
-    .lk_valid(lk_valid), .lk_level(LVL), .lk_tx(lk_tx), .lk_ty(lk_ty),
+    .lk_valid(lk_valid), .lk_level(seq_level), .lk_tx(lk_tx), .lk_ty(lk_ty),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
     .fill_commit(dl_commit), .fill_level(fill_level),
     .fill_tx(fill_tx), .fill_ty(fill_ty), .fill_addr(fill_addr),
@@ -241,10 +245,10 @@ endtask
 
 // run one output line and count its pixels; returns through `seen`
 integer seen = 0;
-integer bad  = 0;
+integer bad_fine = 0, bad_coarse = 0;
 integer y;
-integer scol, srow;
-reg [7:0] exp;
+integer scol, srow, ccol, crow;
+reg [7:0] exp_f, exp_c;
 task automatic run_line(input integer row, input integer clocks);
     integer t;
 begin
@@ -255,25 +259,30 @@ begin
     @(negedge clk);
     cy = row[9:0];
     seen = 0;
-    bad  = 0;
+    bad_fine = 0; bad_coarse = 0;
     for (t = 0; t < clocks; t = t + 1) begin
         cx = t[10:0];
         @(posedge clk);
         #1;
         if (out_valid) begin
             seen = seen + 1;
-            // where this pixel comes from: the viewport's origin plus the output
-            // column, at step 1.0
+            // A line is legitimate in two forms and no others: drawn from the
+            // view's own level, or drawn from the level below with each of its
+            // pixels covering two by two of these.  Anything else is a wrong
+            // slot, a wrong offset or a mixed line.
             scol = (src_x0 >>> 16) + out_x;
             srow = (src_y0 >>> 16) + row;
-            exp  = tile_byte(LVL, scol[14:8], srow[14:8],
-                             ((srow[7:0]) * 256) + scol[7:0]);
-            if (out_idx !== exp) begin
-                if (bad == 0)
-                    $display("  row %0d x %0d: index %02h, want %02h",
-                             row, out_x, out_idx, exp);
-                bad = bad + 1;
-            end
+            exp_f = tile_byte(LVL, scol[14:8], srow[14:8],
+                              ((srow[7:0]) * 256) + scol[7:0]);
+            ccol = scol >> 1;
+            crow = srow >> 1;
+            exp_c = tile_byte(LVL - 2'd1, ccol[14:8], crow[14:8],
+                              ((crow[7:0]) * 256) + ccol[7:0]);
+            if (out_idx !== exp_f)   bad_fine   = bad_fine + 1;
+            if (out_idx !== exp_c)   bad_coarse = bad_coarse + 1;
+            if (out_idx !== exp_f && out_idx !== exp_c && (bad_fine + bad_coarse) == 1)
+                $display("  row %0d x %0d: index %02h, want %02h or %02h",
+                         row, out_x, out_idx, exp_f, exp_c);
         end
     end
 end
@@ -281,12 +290,17 @@ endtask
 
 // hand every queued request to the host and let it answer
 integer k, delivered, seen_col;
+// `coarse_only` answers just the requests from the level below, which is how the
+// fallback test keeps the fine tiles away
+integer coarse_only = 0;
 task automatic serve_all;
 begin
     delivered = 0;
     for (k = 0; k < req_n; k = k + 1) begin
-        deliver(q_level[k], q_tx[k], q_ty[k]);
-        delivered = delivered + 1;
+        if (!coarse_only || q_level[k] != LVL) begin
+            deliver(q_level[k], q_tx[k], q_ty[k]);
+            delivered = delivered + 1;
+        end
     end
     req_n = 0;
 end
@@ -302,7 +316,7 @@ begin
     settled = 0;
     for (att = 0; att < 8 && !settled; att = att + 1) begin
         run_line(row, 700);
-        if (seen == OUT_W && bad == 0) settled = 1;
+        if (seen == OUT_W && (bad_fine == 0 || bad_coarse == 0)) settled = 1;
         else serve_all;
     end
     serve_all;
@@ -326,76 +340,69 @@ initial begin
         @(posedge clk);
     end
 
-    // 1. an empty pool: the line misses, and the request names the tile that
-    //    the line's first pixel lives in
+    // 1. an empty pool: the line cannot draw, and the miss becomes a request for
+    //    the tile its first pixel lives in
     $display("--- test 1: an empty pool, a line that misses");
     miss_before = tile_misses;
     run_line(0, 600);
     want(tile_misses > miss_before, "the line missed a tile it did not have");
-    want(bad == 0, "nothing was drawn from a tile that never arrived");
+    want(seen == 0, "nothing was drawn with an empty pool");
     repeat (200) @(posedge clk);
     want(req_n > 0, "the miss reached the link as a request");
     want(q_level[0] === LVL && q_tx[0] === 15'd0 && q_ty[0] === 15'd0,
-         "the first request is the tile the line's first pixel is in");
+         "the first request is for the view's own level, at its first tile");
     $display("  %0d request(s) after one line", req_n);
 
-    // 2. the host answers; the same line now draws exactly
-    $display("--- test 2: the host answers, the line draws");
+    // 2. the host answers, and the picture converges on the view's own level
+    $display("--- test 2: the host answers, the line sharpens");
     serve_all;
     settle_line(0);
     want(settled == 1, "the line draws once its tiles have arrived");
     want(seen == OUT_W, "the line emitted its pixels once its tiles were in");
-    want(bad == 0, "every pixel is the level's own byte");
+    for (att = 0; att < 6 && bad_fine != 0; att = att + 1) begin
+        repeat (TILE_RETRY_TB + 20) @(posedge clk);
+        run_line(0, 900);
+        serve_all;
+    end
+    want(bad_fine == 0, "every pixel is the view's own level once it is resident");
     miss_before = tile_misses;
     run_line(0, 700);
-    want(seen == OUT_W, "the same line draws again");
-    want(bad == 0, "and is still exact");
+    want(seen == OUT_W && bad_fine == 0, "the same line draws again, sharp");
     want(tile_misses == miss_before, "no tile was missed with the tiles in");
-    $display("  %0d pixels, %0d attempt(s)", seen, att);
 
-    // 3. a row in the next tile down: the tile grid is vertical as well as
-    //    horizontal, and a row that crosses it asks for a different tile
-    $display("--- test 3: a view starting in the tile below");
-    serve_all;
+    // 3. the fallback: a view whose fine tiles were never sent, but whose coarse
+    //    ones were.  The line must draw, blocky and exact, from the level below
+    //    rather than stalling or showing a hole.
+    $display("--- test 3: the coarse fallback");
     @(negedge clk);
-    src_y0 = 32'sd256 * 32'sd65536;        // source row 256 is in the next tile
+    src_x0 = 32'sd1024 * 32'sd65536;        // four tiles right, never sent fine
     miss_before = tile_misses;
     run_line(0, 700);
-    want(tile_misses > miss_before, "the lower view missed its tiles");
-    want(bad == 0, "nothing was drawn from a tile that never arrived");
+    want(tile_misses > miss_before, "the new view missed its fine tiles");
     repeat (200) @(posedge clk);
-    want(req_n > 0, "the lower view asked for its tiles");
-    want(q_ty[0] === 15'd1, "the request names the tile one row down");
+    // answer only the coarse requests
+    coarse_only = 1;
     serve_all;
+    coarse_only = 0;
     settle_line(0);
-    want(settled == 1, "the lower view draws once its tiles have arrived");
-    @(negedge clk);
-    src_y0 = 32'sd0;
-    settle_line(0);
-    want(settled == 1, "and the view back at the top still draws");
+    want(settled == 1, "the line draws from the level below");
+    want(seen == OUT_W, "the fallback line emitted its pixels");
+    want(bad_coarse == 0, "every pixel is the coarse level's, two by two");
+    want(bad_fine != 0, "and it is coarser than the view's own level");
+    $display("  fallback line: %0d coarse mismatches, %0d fine", bad_coarse, bad_fine);
 
-    // 4. pan two tiles to the right: the tiles the line needs now are not in the
-    //    pool, so it misses, asks, and then draws
-    $display("--- test 4: pan onto tiles that are not resident");
-    @(negedge clk);
-    src_x0 = 32'sd512 * 32'sd65536;         // 512 source pixels right
-    serve_all;
+    // 4. send the fine tiles for that view: the picture sharpens
+    $display("--- test 4: the fine tiles arrive late");
+    for (att = 0; att < 8 && bad_fine != 0; att = att + 1) begin
+        run_line(0, 700);
+        serve_all;
+        repeat (TILE_RETRY_TB + 20) @(posedge clk);
+    end
+    want(bad_fine == 0, "the picture sharpened once the fine tiles arrived");
     miss_before = tile_misses;
     run_line(0, 700);
-    want(tile_misses > miss_before, "the panned line missed the tiles it needed");
-    want(bad == 0, "nothing was drawn from a tile that never arrived");
-    repeat (200) @(posedge clk);
-    want(req_n > 0, "the panned line asked for its tiles");
-    seen_col = 0;
-    for (k = 0; k < req_n; k = k + 1) if (q_tx[k] >= 15'd1) seen_col = 1;
-    want(seen_col == 1, "the requests are for the tiles the pan moved onto");
-    settle_line(0);
-    want(settled == 1, "the panned line draws once its tiles have arrived");
-    want(bad == 0, "every pixel of the panned line is exact");
-    miss_before = tile_misses;
-    run_line(0, 700);
-    want(seen == OUT_W && bad == 0, "and draws again without help");
-    want(tile_misses == miss_before, "the panned line needed no new tiles");
+    want(seen == OUT_W && bad_fine == 0, "and stays sharp without help");
+    want(tile_misses == miss_before, "no tile was missed once both levels were in");
 
     if (errors) $display("RESULT: FAIL (%0d errors)", errors);
     else        $display("RESULT: PASS (a miss becomes a request, an answer becomes a line)");
