@@ -81,7 +81,7 @@ maps_tile_addr #(.TSIZE(TSIZE), .TENT(TENT), .TW(TW)) u_addr (
     .tx(lk_tx), .ty(lk_ty), .byte_off(byte_off), .entries(avail));
 
 localparam [2:0] F_IDLE = 3'd0, F_LOOK = 3'd1, F_ISSUE = 3'd2, F_READ = 3'd3,
-                 F_WAIT = 3'd4;
+                 F_WAIT = 3'd4, F_WAIT2 = 3'd5;
 reg [2:0] st;
 
 // the chunk's length is the tile boundary or the window's end, whichever comes
@@ -112,15 +112,19 @@ always @(posedge clk) begin
             st      <= F_LOOK;
         end
 
-        // Ask the page table where this entry is.  It registers the question,
-        // then registers the answer, so `lk_hit` is only valid two cycles after
-        // this one -- the wait state is not politeness, it is the pipeline.
+        // Ask the page table where this entry is.  It registers the question and
+        // then registers the answer -- `pend` one cycle after it samples
+        // `lk_valid`, `lk_hit` one cycle after that -- so the answer is on the
+        // wire in the second cycle after this one.  The two wait states are not
+        // politeness, they are the pipeline; sampling a cycle early reads a miss
+        // that is not there.
         F_LOOK: begin
             lk_valid <= 1'b1;
             st       <= F_WAIT;
         end
 
-        F_WAIT: st <= F_ISSUE;
+        F_WAIT:  st <= F_WAIT2;      // lk_valid is on the wire here
+        F_WAIT2: st <= F_ISSUE;      // the table has registered the question here
 
         F_ISSUE: if (lk_hit) begin
             rd_addr  <= lk_addr + {9'd0, byte_off};

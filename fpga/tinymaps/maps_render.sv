@@ -35,7 +35,11 @@ module maps_render #(
     // entries fetched per row; one entry is two source pixels.  With step_x < 2
     // a line spans at most 2*OUT_W source pixels, i.e. OUT_W entries, and four
     // more cover the straddle at the edges.
-    parameter integer SPAN  = OUT_W + 4
+    parameter integer SPAN  = OUT_W + 4,
+    // fetch through the tile pool instead of a linear level address.  Off by
+    // default so the linear path stays what everything else was verified against;
+    // a build that streams turns it on and supplies the sequencer's ports.
+    parameter bit TILED = 1'b0
 ) (
     input  wire        clk,
     input  wire        resetn,
@@ -70,10 +74,34 @@ module maps_render #(
     output reg  [11:0] out_x,
     output reg  [23:0] out_rgb,      // palette-resolved, for the testbench
     output reg  [7:0]  out_idx,      // the palette index, for a cross-domain line store
-    output reg         out_valid
+    output reg         out_valid,
+
+    // Tile mode.  When TILED the fetch engine stops computing a linear byte
+    // address and instead asks maps_tile_fetch for the window; the sequencer
+    // reads it in per-tile chunks and hands back one entry at a time.  The linear
+    // path stays exactly as it was for TILED=0, so the module can be built both
+    // ways and the two compared.
+    input  wire [1:0]  tile_level,
+    output reg         seq_start,
+    output reg  [13:0] seq_entry,
+    output wire [11:0] seq_row,
+    output wire [15:0] seq_span,
+    input  wire        seq_we,
+    input  wire [AIDX-1:0] seq_widx,
+    input  wire [15:0] seq_wdata,
+    input  wire        seq_done,
+    input  wire        seq_miss,
+    output reg  [15:0] tile_misses
 );
 
 localparam integer AIDX = $clog2(SPAN);
+
+// one source of entries for the row buffers, whichever mode is on
+wire             src_we   = TILED ? seq_we    : rd_valid;
+wire [AIDX-1:0]  src_idx  = TILED ? seq_widx  : f_j;
+wire [15:0]      src_data = TILED ? seq_wdata : rd_data;
+wire             src_done = TILED ? seq_done  : (f_j == f_cnt[AIDX-1:0] - 1'b1);
+wire             src_miss = TILED ? seq_miss  : 1'b0;
 
 // ------------------------------------------------------------------ palette --
 reg [23:0] pal [0:255];
@@ -141,6 +169,9 @@ reg [AIDX-1:0] f_j;
 reg [31:0] f_row, f_col;
 reg [24:0] f_base;
 reg [15:0] f_cnt;
+
+assign seq_row  = f_row[11:0];
+assign seq_span = f_cnt;
 
 reg        p1_v, p1_odd, p1_bil;
 reg        p1b_v, p1b_odd, p1b_bil;
@@ -212,6 +243,7 @@ always @(posedge clk or negedge resetn) begin
         p2_v <= 1'b0; p2_bil <= 1'b0; p2_x <= 12'd0;
         p2_h0 <= 8'd0; p2_h1 <= 8'd0; p2_wy <= 16'd0;
         p3_v <= 1'b0; p3_x <= 12'd0; p3_idx <= 8'd0;
+        seq_start <= 1'b0; seq_entry <= 14'd0; tile_misses <= 16'd0;
         out_x <= 12'd0; out_rgb <= 24'd0; out_idx <= 8'd0; out_valid <= 1'b0; fetch_count <= 16'd0;
         // The row buffers are deliberately not reset: a reset forces them out
         // of block RAM into flip-flops, and they are only read once bval says
@@ -220,34 +252,45 @@ always @(posedge clk or negedge resetn) begin
         out_valid <= 1'b0;
         p1_v     <= 1'b0;
         rd_start <= 1'b0;
+        seq_start <= 1'b0;
         f_ack    <= 1'b0;
 
         // ------------------------------------------------------- fetch engine --
         if (f_busy) begin
-            if (rd_valid) begin
+            if (src_we) begin
                 case (f_buf)
-                    2'd0: lb0[f_j] <= rd_data;
-                    2'd1: lb1[f_j] <= rd_data;
-                    default: lb2[f_j] <= rd_data;
+                    2'd0: lb0[src_idx] <= src_data;
+                    2'd1: lb1[src_idx] <= src_data;
+                    default: lb2[src_idx] <= src_data;
                 endcase
-                if (f_j == f_cnt[AIDX-1:0] - 1'b1) begin
-                    f_busy      <= 1'b0;
-                    f_ack       <= 1'b1;
-                    fetch_count <= fetch_count + 16'd1;
-                    bval[f_buf] <= 1'b1;
-                    brow[f_buf] <= f_row;
-                    col_tag     <= f_col;
-                end else begin
-                    f_j <= f_j + 1'b1;
-                end
+            end
+            if (src_done) begin
+                f_busy      <= 1'b0;
+                f_ack       <= 1'b1;
+                fetch_count <= fetch_count + 16'd1;
+                bval[f_buf] <= 1'b1;
+                brow[f_buf] <= f_row;
+                col_tag     <= f_col;
+            end else if (src_miss) begin
+                // the tile is not in the pool: leave the row unmarked, so the
+                // line engine does not treat it as landed, and count it
+                f_busy      <= 1'b0;
+                tile_misses <= tile_misses + 16'd1;
+            end else if (!TILED && rd_valid) begin
+                f_j <= f_j + 1'b1;
             end
         end else if (f_req) begin
-            f_req    <= 1'b0;
-            f_busy   <= 1'b1;
-            f_j      <= {AIDX{1'b0}};
-            rd_start <= 1'b1;
-            rd_addr  <= f_base;
-            rd_count <= f_cnt;
+            f_req <= 1'b0;
+            f_busy <= 1'b1;
+            f_j    <= {AIDX{1'b0}};
+            if (TILED) begin
+                seq_entry <= k0_pf[13:0];
+                seq_start <= 1'b1;
+            end else begin
+                rd_start <= 1'b1;
+                rd_addr  <= f_base;
+                rd_count <= f_cnt;
+            end
         end
 
         // ----------------------------------------------------- pixel pipeline --

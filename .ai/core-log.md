@@ -1079,3 +1079,39 @@ Wire the sequencer into `maps_render`, which is the first change to the module t
 - User Test: N/A
 
 ---
+
+## 32 COMMIT Unreleased 2026-10-26T23:59:15-07:00
+
+#### Coming From:
+
+Unreleased a83bc9e
+
+#### Purpose:
+
+Give `maps_render` a fetch path that takes its entries from the tile sequencer instead of a linear level address, and prove that path draws the same pixels as the linear one.
+
+#### Outcome:
+
+`fpga/tinymaps/maps_render.sv` gained a `TILED` parameter and the sequencer's ports: when it is set the fetch engine stops computing `f_base` and `f_cnt` and starts a `maps_tile_fetch` window instead, the sequencer's `we`/`widx`/`wdata` write the row buffers in place of `rd_valid` and `f_j`, its `done` raises `f_ack`, and its `miss` leaves the row unmarked and increments `tile_misses` rather than pretending the line landed. The linear path is untouched and remains the default, so one module builds both ways. `sim/tb_maps_render_tiled.sv` runs the renderer, the sequencer and the real page table together against a pool model whose entries are `{row, entry index}`; all three lines are pixel-exact, all five fetches hit, and nothing is missed. Three faults surfaced, and only one of them was in the design. The design's was the sequencer sampling the page table a cycle early: the table registers the lookup and then the verdict, so its answer is two cycles behind the question, and the single wait state read the stale zero as a miss. It had gone unnoticed because `sim/tb_maps_tile_fetch.sv` modelled the table combinationally, so that model now carries the real two-cycle latency and the sequencer gained the second wait state. The other two were in the new testbench: it filled the pool after loading the palette, by which time the free-running renderer had already asked for a row and missed it, and its expected-value check inverted the halves of `{a, b}`, which is invisible on row 0 and wrong on every other. The full suite is sixteen of sixteen plus `check_render` and `check_tmds`, and the eight-seed sweep closes timing at seed 1 82.22, 2 82.40, 3 82.42, 4 83.77, 5 82.67, 6 78.62, 7 81.41 and 8 84.52 MHz against 74.25, so the tile multiplexers cost less than a megahertz. Nothing was deployed, on the user's instruction to hold the board; `TILED` is off in `tinymaps_top`, so the bitstream behaves exactly as the one on the Tang. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+The half that talks to the card: a request protocol over the BL616 link for "give me tile (level, tx, ty)", the tile server on the TinyTang side that answers it from the SD card with the file reads it already performs for other cores, then prefetch and eviction in the page table, and the coarse-level fallback for a miss -- which is what makes the renderer's not-retrying a missed row harmless, since a settled view will need a frame drawn from the coarser level until the tile arrives. The first hardware test that matters is a pan across ground that is not resident, which needs the protocol, the server and the fallback together.
+
+#### Files Modified:
+
+- docs/HANDOFF.md
+- docs/streaming-scope.md
+- fpga/tinymaps/maps_render.sv
+- fpga/tinymaps/maps_tile_fetch.sv
+- fpga/tinymaps/maps_tiles.sv
+- sim/tb_maps_render_tiled.sv
+- sim/tb_maps_tile_fetch.sv
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

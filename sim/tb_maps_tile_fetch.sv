@@ -60,10 +60,27 @@ maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TSIZE), .TENT(TENT), .TW(TW)) dut (
     .rd_data(rd_data), .rd_valid(rd_valid));
 
 // ---------------------------------------------------------------- the table ---
+// The model keeps the real table's latency: it registers the question, then
+// registers the answer, so a hit is on the wire two cycles after `lk_valid` goes
+// high.  A combinational model here would let a sequencer that samples a cycle
+// early pass, which is how the first version of the sequencer passed this
+// testbench while missing every tile in the renderer.
 reg table_miss = 1'b0;
 wire [5:0] lk_slot = (lk_tx[5:0] + lk_ty[5:0] * 6'd3) % SLOTS[5:0];
-assign lk_hit  = !table_miss;
-assign lk_addr = POOL + ({19'd0, lk_slot} << TBITS);
+reg [1:0]  lk_pipe = 2'd0;                  // {answer, question}
+reg [5:0]  lk_slot_q = 6'd0;
+reg        miss_q = 1'b0;
+always @(posedge clk) begin
+    if (!resetn) begin
+        lk_pipe <= 2'd0; lk_slot_q <= 6'd0; miss_q <= 1'b0;
+    end else begin
+        lk_pipe   <= {lk_pipe[0], lk_valid};
+        lk_slot_q <= lk_slot;
+        miss_q    <= table_miss;
+    end
+end
+assign lk_hit  = lk_pipe[1] && !miss_q;
+assign lk_addr = POOL + ({19'd0, lk_slot_q} << TBITS);
 
 reg [14:0] slot_tx [0:SLOTS-1];
 reg [14:0] slot_ty [0:SLOTS-1];

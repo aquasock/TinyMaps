@@ -16,8 +16,11 @@
 //
 // The tags live in block RAM, written and read on this one clock; this project
 // never writes block RAM on one clock and reads it on another, because Apicula
-// reads that back wrong on the GW5AST-138.  A lookup therefore takes a cycle:
-// present the coordinates, take `hit` and `addr` on the next one.
+// reads that back wrong on the GW5AST-138.  A lookup therefore takes two cycles:
+// present the coordinates and `lk_valid`, then take `hit` and `addr` in the
+// second cycle after it -- the address register is the block RAM's, and the tag
+// comparison registers on top of that.  A caller samples `lk_hit` a cycle early
+// at its peril; it reads a miss that is not there.
 //
 // The valid bits are flip-flops and not part of the tag, so that reset clears
 // them.  A block RAM's contents at power-up are not something to depend on: a

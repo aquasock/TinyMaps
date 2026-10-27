@@ -182,7 +182,7 @@ testbench than from a rebuilt renderer.
 - **Done: the tile pack** (item 1) -- `maps_pack.py tiles` writes 256-pixel tiles
   at 4bpp with per-tile palettes, 14.24 MiB against 27.62 for the same ground, and
   `verify-tiles` decodes every tile against its source.
-- **Done: the page table** (`maps_tiles.sv`) -- a direct-mapped cache of 512 slots
+- **Done: the page table** (`maps_tiles.sv`) -- a direct-mapped cache of 256 slots
   holding 32-bit tags in block RAM with the valid bits in flip-flops so reset
   clears them, because a garbage tag with its valid bit set would be a false hit
   and the renderer would draw another part of the map.  `fill_addr` is an output:
@@ -195,15 +195,32 @@ testbench than from a rebuilt renderer.
 - **Done: the chunk sequence** (`maps_tile_fetch.sv`) -- one window of a source
   row walked in chunks that each stay inside a tile, looked up per chunk, with a
   miss reported rather than papered over.  The page table's answer is two cycles
-  behind its question, so the sequence has a lookup and a wait state between
-  chunks; that is the whole cost of tiling on the fetch side.
+  behind its question -- it registers the lookup, then registers the verdict --
+  so the sequence has a lookup state and two wait states between chunks.  One
+  wait state is not enough, and the first version had one: it sampled a cycle
+  early, read the stale zero, and reported a miss for a tile that was resident.
+  `sim/tb_maps_tile_fetch.sv` did not catch it because its page-table model
+  answered combinationally; the model now carries the real two-cycle latency, so
+  the mistake cannot come back through that door.
 - **Corrected: a tile is 64 KiB, not 32.** A 256-pixel row is 256 bytes and there
   are 256 rows, so 8bpp tiles are 64 KiB and a 16 MiB pool is 256 slots.  Both the
   page table and the fetch testbench had it as 32 KiB, and the testbench caught it
   by reading a tile offset out of range.
-- **Next: wire the sequence into `maps_render`**, then the request protocol and the
-  TinyTang tile server, then prefetch, eviction and the fallback, then 4bpp in the
-  pixel path.
+- **Done: the renderer's tile path** (`maps_render.sv` with `TILED`) -- the fetch
+  engine stops computing a linear byte address and asks `maps_tile_fetch` for the
+  window, taking its entries one at a time instead of from `rd_valid`.  The
+  linear path is untouched and stays the default, so the two are built from the
+  same module and can be compared.  `sim/tb_maps_render_tiled.sv` runs the
+  renderer, the sequencer and the real page table together against a pool model
+  whose entries are `{row, entry index}`, so a wrong row, a wrong entry and the
+  wrong half of the right entry are three different numbers; all three lines it
+  draws are pixel-exact, every fetch hits, and no tile is missed.  Building it
+  also answered a question the sequencer's own testbench could not: the renderer
+  starts fetching the moment reset is released, so a pool that is not yet
+  resident is a miss in the first line, and a missed row is not retried.
+- **Next: the request protocol and the TinyTang tile server**, then prefetch,
+  eviction and the coarse fallback on a miss (which is what makes that
+  no-retry behaviour harmless), then 4bpp in the pixel path.
 
 **A note on 4bpp and the fetch.** A 16-bit entry carries two 8-bit indices today.
 At 4bpp it would carry four pixels, and the pixel pipeline -- which extracts the

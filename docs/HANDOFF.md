@@ -291,6 +291,19 @@
   crossings and both end stops — and **has not been on hardware**, because the
   Tang was disconnected when it was built.  Nothing has exercised the mouse or
   the keyboard path at all: the frame layouts come from the BL616's own sender.
+- **Tile streaming:** designed and half-built, all of it in simulation and none of
+  it in the top.  `tools/maps_pack.py tiles` writes 256-pixel tiles at 4bpp,
+  `maps_tiles.sv` is the direct-mapped page table over a 16 MiB pool of 64 KiB
+  tiles, `maps_tile_addr.sv` is the chunk arithmetic and `maps_tile_fetch.sv`
+  walks one window of a row in chunks that stay inside a tile.  `maps_render.sv`
+  can now take its entries from that sequencer instead of a linear address
+  (`TILED`), and the tiled path is pixel-exact against the linear one in
+  `sim/tb_maps_render_tiled.sv`.  `TILED` is off in `tinymaps_top`, so the build
+  and the board behave exactly as before.  What is missing is the half that talks
+  to the card: a request protocol to the BL616, the tile server on the TinyTang
+  side, prefetch and eviction, and the coarse-level fallback that a miss needs
+  because a missed row is not retried.  See `docs/streaming-scope.md`.
+
 - **Next step:** the frame-start issue above, which now has a clean reproducer
   in the field: an HDMI monitor shows it with no capture in the path. The
   instrument to add is a per-line lateness counter read back over the link.
