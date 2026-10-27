@@ -26,6 +26,18 @@
   deployment, user test passed · `876ade7` UART pair, loader wired, host tools ·
   this cycle: the loader deployed and a known image verified on hardware.
 
+- **The main power input is dead.** Measured 2026-10-26 after the link dropped
+  during a pack load: 1.4 V at 1.5 A from a bench supply on that port (about
+  0.9 ohm), 1.0 ohm across its VBUS and ground on a meter with 0.1 ohm of leads
+  nulled, the same in both directions, while the OTG input reads 27 kOhm and
+  drifts as its input capacitor charges. A resistive short that low is a failed
+  ceramic capacitor or ESD diode on that branch rather than a plain bridge; the
+  board runs from the other input, so nothing downstream of the two input
+  Schottkys is involved. Not repaired yet. Until it is, power the board from
+  the battery connector J5 at 4.2 V or below -- 4.2 V is the recorded maximum
+  for +BATT -- and the shell returns in two-wire; on the OTG cable alone the
+  board comes up one-wire as SIPEED's FT2232 debugger and TinyTang does not
+  run, so there is no shell and no way to load a pack.
 - **Branches/PRs:** none. Everything is on `main`, which is the only branch.
 
 - **CI:** none configured. Verification is `tools/build_maps_core_open.sh` and

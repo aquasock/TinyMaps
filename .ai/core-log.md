@@ -685,3 +685,33 @@ The picture has no known defect left, so the next work is the timing margin: fin
 - User Test: PASS
 
 ---
+
+## 20 COMMIT Unreleased 2026-10-26T18:23:31-07:00
+
+#### Coming From:
+
+Unreleased 6b73491
+
+#### Purpose:
+
+Get the real map pack back onto a board whose main power input had failed, so the shipped core could be exercised with the picture defect closed.
+
+#### Outcome:
+
+The board's main power input died during the previous cycle's pack load, and that failure, not the USB port, is what ended the session at the time: a bench supply on that port collapses to 1.4 V at 1.5 A, about 0.9 ohm, and a meter reads 1.0 ohm across its VBUS and ground with 0.1 ohm of lead resistance nulled, identical in both directions, while the OTG input reads 27 kOhm and drifts as its capacitor charges. A resistive short of that value points at a failed ceramic capacitor or ESD diode on that input's branch rather than a plain metal bridge, which would read near the lead resistance, and the board runs from the other input, so nothing downstream of the two input Schottkys is involved. Nothing was repaired; the user powered the board from the battery connector J5 instead, first at 4.7 V and then, after this project recorded that the schematic marks +BATT 4.2 V maximum, at 4.2 V, and the shell came back in two-wire on that supply. On the OTG cable alone the board comes up one-wire as SIPEED's FT2232 debugger with TinyTang not running, which is the documented BRD-006 behaviour and leaves no shell and no way to load a pack; the user's observation that a charge-only OTG supply does boot TinyTang, and that attaching the host afterwards is enough for two-wire, is evidence against the recorded guess that the power input's VBUS selects the mode, and belongs in TinyTang's own records rather than this one. `tangload` then programmed `tinymaps.df0b0e056c49.bin` -- the artefact entry 19 built, so no build ran in this cycle -- the link was probed with the palette command before any payload, and `tools/load_pack.py` wrote all 28.00 MiB of the pack with every block and image CRC accepted, which is the transfer that had died mid-way when the input failed. The level table was sent with all four entries and `tools/set_view.py --level 3` put the viewport on the 768x768 level at `0x1b703d8`, step 0.6000, origin (0, 168); `tools/read_status.py` confirms the step and origin, and its known top-byte defect still reports that base as `0xb7b703d8`. The user reports the map, the wheel and the pan all working, which is the first acceptance of the shipped core with real map data rather than a diagnostic pattern. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Repair the power input when convenient: lift one leg of that branch's input capacitor and re-measure, then its ESD diode, then suspect the receptacle, since a reading that survives both removals is a connector fault. The engineering work behind it is unchanged and now the only item with real risk in it -- the eight-seed sweep gives `hclk` between 66.63 and 75.65 MHz against 74.25 with only seed 7 passing, so the critical path behind `maps_render.sv:173`'s `row_ok` and the fetch address needs finding and shortening before another logic change is safe. The status readback's wrong top byte above 16 MB and the zoom ceiling that lets the finest level overshoot its own width are both still open and small.
+
+#### Files Modified:
+
+- docs/HANDOFF.md
+
+#### Status:
+
+- Build: N/A
+- Deployment: PASS
+- User Test: PASS
+
+---
