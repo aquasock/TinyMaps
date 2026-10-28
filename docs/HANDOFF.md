@@ -26,6 +26,63 @@
   deployment, user test passed · `876ade7` UART pair, loader wired, host tools ·
   this cycle: the loader deployed and a known image verified on hardware.
 
+- **Fixed this cycle — the stretched, smeared picture.** The picture on the Tang
+  was stretched vertically, broken into vertical bars and smeared on the first
+  move. It was not the loader, the pack, the palette or the addressing: it was
+  the renderer failing to draw most of the lines it was offered. The new bench
+  `sim/tb_maps_line_budget.sv` runs the real renderer, the real chunk sequencer
+  and the real page table at the top's own geometry — `OUT_W` 1280, `SPAN` 644
+  entries, 128-pixel tiles — pre-fills the pool so every fetch hits because what
+  is under test is time and not data, and paces `cy` one line per 1650 clocks,
+  which is what a 1280-pixel line has at 74.25 MHz. With a pool that answers
+  every clock the engine kept up, and that is why nothing had ever caught this:
+  every other bench models a channel about twice as fast as the real one. At two
+  clocks an entry — the rate the handoff's own measurement of a 644-entry row at
+  about 1340 clocks implies — the engine completed **26 of 48 lines**.
+
+  The mechanism, from the instrumented bench rather than from reading the code: a
+  row fetch takes 1486 clocks and the emit that hides it is 1285, so the prefetch
+  started at a line's `S_PLAN` landed about 200 clocks *after* the next line had
+  begun. That line found its second row still arriving, took the blocking path —
+  refetch both rows and a third, 4461 clocks — and lost 2.7 lines. Emits then
+  started alternately 1285 and 5963 clocks apart: four row fetches per two lines
+  where one would do, a period of 7248 clocks against a 1650-clock raster. Two
+  thirds of the lines are never drawn and the line store repeats what it has,
+  which is the stretch, the bars and the smear.
+
+  The fix is in `maps_render.sv`. A fourth row buffer, and the buffer a row lives
+  in is now its own row number modulo four rather than a `cur`/`nxt`/`fre`
+  rotation, so a line the raster skips is answered out of the buffers it should
+  be answered from instead of failing a check that only ever looked one place
+  along. Each line fetches the row *three* on from its own first row, which gives
+  that fetch two line times instead of one. And the prefetch is issued from
+  `S_EMIT` as soon as the channel is free, not only at the plan: the request used
+  to be dropped whenever the channel was still busy with the row started a line
+  ago, and one dropped prefetch became a blocking path two lines later. A
+  bounded `S_HOLD` state waits for a row already in flight when the line's own
+  measured period has the slack for it, rather than refetching three rows the
+  line cannot afford. At two clocks an entry the bench goes from 26/48 to 42/48
+  with **zero** blocking paths after warm-up, the six remaining losses being the
+  cold start where the buffers begin empty; the same bench run against the
+  pre-fix renderer reports 26/48 with three blocking paths, so it measures the
+  fault and not a coincidence, and both versions pass at one clock an entry.
+
+  What that leaves is throughput, not deadline: one row per line means the
+  channel has to deliver an entry faster than every 2.5 clocks. At the measured
+  1340 clocks a row that is 310 clocks of headroom per line, and the two-line
+  lead absorbs up to 1960 clocks of jitter — refresh, arbitration with the
+  scan-out — in any single fetch, which is what the old one-line deadline had
+  none of. A 32-bit pool read would double that headroom and is the change to
+  make if the channel turns out slower than measured.
+
+  The fourth row buffer and the second row-address multiply cost nothing that
+  shows: eight seeds pack, 75.62 to 85.48 MHz, best at seed 3, which is the band
+  this design sat in before the change. The best artefact is
+  `build/seed-3/open/tinymaps.a8ba28a06bf9.bin`; seed 2 at 75.62 MHz is the one
+  to use if a particular board needs more margin than the picture needs speed.
+  Twenty of twenty simulations pass, the new bench included, and nothing has
+  been deployed — the board still runs the previous build.
+
 - **The main power input is dead.** Measured 2026-10-26 after the link dropped
   during a pack load: 1.4 V at 1.5 A from a bench supply on that port (about
   0.9 ohm), 1.0 ohm across its VBUS and ground on a meter with 0.1 ohm of leads

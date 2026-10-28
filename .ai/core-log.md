@@ -1640,3 +1640,35 @@ Deploy, serve a level-0 view from the pattern pack, and read the screen: the col
 - User Test: NOT RUN
 
 ---
+
+## 48 COMMIT Unreleased 2026-10-27T19:34:24-07:00
+
+#### Coming From:
+
+Unreleased fb698de
+
+#### Purpose:
+
+Find out, by measurement rather than by another guess, why the picture on the Tang is stretched and smears on the first move, and fix what the measurement names.
+
+#### Outcome:
+
+The picture was not the loader, the pack, the palette or the addressing: it was the renderer failing to draw most of the lines the video stage offered, and the line store repeating the rows it had. `sim/tb_maps_line_budget.sv` is what made that a measurement rather than an argument -- the real renderer, the real chunk sequencer and the real page table at the top's own geometry, 1280 pixels and a 644-entry window in 128-pixel tiles, with the pool pre-filled so every fetch hits because what is under test is time and not data, and `cy` paced one line per 1650 clocks. With a pool answering every clock the engine kept up, which is why the other seventeen testbenches had never caught this: they all model a channel about twice as fast as the real one. At two clocks an entry -- the rate a 644-entry row at about 1340 clocks implies -- it completed 26 of 48 lines. The instrumented bench named the mechanism: a row fetch takes 1486 clocks against an emit of 1285, so the prefetch started at a line's `S_PLAN` landed about 200 clocks after the next line had begun, that line took the blocking path for three refetches and 4461 clocks, and emits went on starting alternately 1285 and 5963 clocks apart -- four row fetches per two lines where one would do, a 7248-clock period against a 1650-clock raster. The fix in `maps_render.sv` is a fourth row buffer, with a row's buffer now its own row number modulo four rather than a `cur`/`nxt`/`fre` rotation, so a line the raster skips is answered out of the buffers it should be answered from; each line fetches the row three on from its own first row, which gives that fetch two line times instead of one; and the prefetch is issued from `S_EMIT` as soon as the channel is free rather than only at the plan, because the request used to be dropped whenever the channel was still busy with the row started a line ago, and one dropped prefetch became a blocking path two lines later. A bounded `S_HOLD` state waits for a row already in flight when the line's own measured period has the slack for it, instead of refetching three rows the line cannot afford. The bench goes from 26/48 to 42/48 with zero blocking fetches after the cold start, and reports 26/48 with three of them when run against the pre-fix renderer at the same channel rate, so it measures the fault and not a coincidence; both versions pass at one clock an entry, which is why nothing had caught it. What is left is throughput rather than deadline -- one row per line needs better than 2.5 clocks an entry, which at 1340 clocks a row is 310 clocks of headroom a line and 1960 clocks of jitter absorbed in any single fetch -- and a 32-bit pool read is the change that doubles it if the channel is slower than measured. Eight seeds pack, 75.62 to 85.48 MHz, best at seed 3 at 85.48 MHz in `build/seed-3/open/tinymaps.a8ba28a06bf9.bin`, the same band this design sat in before the change, so the fourth buffer and the second row-address multiply cost nothing measurable; twenty of twenty simulations pass, `check_render` and `check_tmds` included, and `verilator --lint-only -Wall` reports no latches on the renderer. Nothing was deployed, on the user's instruction, so the board still runs the previous build. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy `build/seed-3/open/tinymaps.a8ba28a06bf9.bin` when the user says so, serve the level-0 view from the real pack until it settles, then pan and zoom: the picture should be stable, sharp and unstretched while still, with no smear while moving. If lines are still short, the deciding measurement is `tb_maps_line_budget` at a slower `CHAN_CLOCKS`; the throughput headroom is 310 clocks a line, and a 32-bit pool read is the change that doubles it.
+
+#### Files Modified:
+
+- fpga/tinymaps/maps_render.sv
+- sim/tb_maps_line_budget.sv
+- docs/HANDOFF.md
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

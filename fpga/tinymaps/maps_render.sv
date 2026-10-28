@@ -134,53 +134,64 @@ always @(posedge clk) if (pal_we) pal[pal_idx] <= pal_data;
 reg [15:0] lb0 [0:SPAN-1];
 reg [15:0] lb1 [0:SPAN-1];
 reg [15:0] lb2 [0:SPAN-1];
-reg [31:0] brow [0:2];
-reg [2:0]  bval;
+reg [15:0] lb3 [0:SPAN-1];
+reg [31:0] brow [0:3];
+reg [3:0]  bval;
 reg [31:0] col_tag;
 
 // read stage: the three arrays are read together and the two live rows are
 // muxed combinationally, so an entry is available one cycle after rd_idx.
 reg [AIDX-1:0] rd_idx, rd_idx_d;
-reg [15:0] q0, q1, q2, qc_d, qn_d;
-reg [1:0]  cur, nxt;
+reg [15:0] q0, q1, q2, q3, qc_d, qn_d;
+// Which buffer holds which row is arithmetic, not state: four buffers and row R
+// lives in buffer R mod 4.  Rotating a cur/nxt pair instead meant that a line
+// skipped in the raster (the engine was late, cy moved on by two) failed a check
+// that only ever looked at (cur,nxt) and had to block for three refetches, even
+// though the rows it wanted were sitting in the buffers one place along.
+// Assigned below, once r0 exists.
+wire [1:0] cur, nxt;
 
 always @(posedge clk or negedge resetn) begin
     if (!resetn) begin
-        q0 <= 16'd0; q1 <= 16'd0; q2 <= 16'd0; qc_d <= 16'd0; qn_d <= 16'd0;
+        q0 <= 16'd0; q1 <= 16'd0; q2 <= 16'd0; q3 <= 16'd0; qc_d <= 16'd0; qn_d <= 16'd0;
         rd_idx_d <= {AIDX{1'b0}};
     end else begin
         q0 <= lb0[rd_idx];
         q1 <= lb1[rd_idx];
         q2 <= lb2[rd_idx];
+        q3 <= lb3[rd_idx];
         // The entry *before* the current one is only the previous cycle's read
         // when the index advanced.  At magnification it stalls, and reloading
         // qc_d/qn_d every cycle would replace it with the current entry.
         rd_idx_d <= rd_idx;
         if (rd_idx != rd_idx_d) begin
-            qc_d <= (cur == 2'd0) ? q0 : (cur == 2'd1) ? q1 : q2;
-            qn_d <= (nxt == 2'd0) ? q0 : (nxt == 2'd1) ? q1 : q2;
+            qc_d <= (cur == 2'd0) ? q0 : (cur == 2'd1) ? q1 : (cur == 2'd2) ? q2 : q3;
+            qn_d <= (nxt == 2'd0) ? q0 : (nxt == 2'd1) ? q1 : (nxt == 2'd2) ? q2 : q3;
         end
     end
 end
 
-wire [15:0] qcw = (cur == 2'd0) ? q0 : (cur == 2'd1) ? q1 : q2;
-wire [15:0] qnw = (nxt == 2'd0) ? q0 : (nxt == 2'd1) ? q1 : q2;
+wire [15:0] qcw = (cur == 2'd0) ? q0 : (cur == 2'd1) ? q1 : (cur == 2'd2) ? q2 : q3;
+wire [15:0] qnw = (nxt == 2'd0) ? q0 : (nxt == 2'd1) ? q1 : (nxt == 2'd2) ? q2 : q3;
 
 // ------------------------------------------------------------- line engine ---
 localparam [2:0] S_IDLE = 3'd0, S_PLAN = 3'd1, S_BFETCH = 3'd2,
                  S_EMIT = 3'd3, S_DONE  = 3'd4,
                  S_ROWS = 3'd5,        // the row pair
-                 S_RADDR = 3'd6;       // that row's byte address in the level
+                 S_RADDR = 3'd6,       // that row's byte address in the level
+                 S_HOLD  = 3'd7;       // a row is in flight; let it land
 
 reg [2:0]  st;
 reg [9:0]  cy_d;
+reg [9:0]  cy_seen;                    // the video stage's line, tracked on its own
+reg [15:0] line_cnt;                  // clocks since that line began
+reg [15:0] slack;                      // how late this line may still start
 reg [31:0] acc_y;
 reg [31:0] r0, r1;
 reg [15:0] wy;
 reg [31:0] k0;
 reg [15:0] emit_x;
 reg [31:0] acc_x;
-reg [1:0]  fre;
 reg [2:0]  block_step;
 reg [2:0]  block_retry;                // where the blocking fetch resumes
 
@@ -199,7 +210,7 @@ reg [20:0] retry_cnt;                 // and this is how long before it asks aga
 // rows that came from the same level.
 reg        cfall;
 reg        stream_d;                  // the source the picture was being drawn from
-reg  [2:0] bcrs;                      // per row buffer: fetched from the level below
+reg  [3:0] bcrs;                      // per row buffer: fetched from the level below
 reg [24:0] f_base;
 reg [15:0] f_cnt;
 
@@ -243,18 +254,27 @@ wire [7:0] b1 = p1b_odd ? qnw[7:0]   : qnw[15:8];
 // eighteen carry-chain steps and 2.57 ns of routing in it.
 wire [31:0] row_ok = (r0 + 32'd1 >= level_h) ? level_h - 32'd1 : r0 + 32'd1;
 wire [31:0] pf_row = (r0 + 32'd2 >= level_h) ? level_h - 32'd1 : r0 + 32'd2;
-reg  [31:0] r_ok, r_pf;
+// The row to fetch during this line.  It is three on from the line's own first
+// row, not two, because a row is used one line after it is fetched and the
+// fetch has to be given two lines to land in: one row fetch is a shade longer
+// than the emit that hides it, so a one-line deadline could never be met --
+// every second line found its row still arriving, took the blocking path for
+// three refetches, and lost its place in the raster for good.
+wire [31:0] pf_row3 = (r0 + 32'd3 >= level_h) ? level_h - 32'd1 : r0 + 32'd3;
+reg  [31:0] r_ok, r_pf, r_pf3;
 // r_pf * level_w, registered: with the row pair it was a multiply and a 25-bit
 // add chain into f_base inside one clock, which is what the critical path became
 // once the row pair moved out of it.
 reg  [31:0] r_addr;
+reg  [31:0] r_addr3;
 // A buffer satisfies a row only if it also came from the level the picture is
 // being drawn at.  Without the scale here a coarse row would satisfy a fine
 // line for ever: the epoch would end, the picture would ask for the view's own
 // level, and every buffer would say "I already have that row".
-wire        pf_want = !(bval[0] && brow[0] == r_pf && bcrs[0] == cfall) &&
-                      !(bval[1] && brow[1] == r_pf && bcrs[1] == cfall) &&
-                      !(bval[2] && brow[2] == r_pf && bcrs[2] == cfall);
+wire        pf_want = !(bval[0] && brow[0] == r_pf3 && bcrs[0] == cfall) &&
+                      !(bval[1] && brow[1] == r_pf3 && bcrs[1] == cfall) &&
+                      !(bval[2] && brow[2] == r_pf3 && bcrs[2] == cfall) &&
+                      !(bval[3] && brow[3] == r_pf3 && bcrs[3] == cfall);
 wire [31:0] e_now  = (acc_x + 32'd65536) >>> 17;
 // the coarse pass works in half-scale coordinates: the row, the window's first
 // entry and the pixel's own position are all the fine ones halved.  r0/r_ok/r_pf
@@ -263,6 +283,7 @@ wire [31:0] e_now  = (acc_x + 32'd65536) >>> 17;
 wire [31:0] r0_e   = cfall ? (r0   >> 1) : r0;
 wire [31:0] r_ok_e = cfall ? (r_ok >> 1) : r_ok;
 wire [31:0] r_pf_e = cfall ? (r_pf >> 1) : r_pf;
+wire [31:0] r_pf3_e = cfall ? (r_pf3 >> 1) : r_pf3;
 wire [31:0] k0_e   = cfall ? (k0_pf >> 1) : k0_pf;
 // How many entries to fetch: the window, or the part of it inside the level.
 // Fetching the whole span regardless read past the level's right edge -- harmless
@@ -292,18 +313,53 @@ wire [31:0] k0_now = (src_x0 + 32'd65536) >>> 17;
 wire [31:0] k0_pf  = (k0_now == 32'd0) ? 32'd0 : k0_now - 32'd1;
 wire        win_ok = (col_tag == k0_pf);
 
+// The buffer each of this line's rows belongs in.  Row R lives in buffer R mod 4,
+// so these follow r0 with no rotation to keep in step -- and a line the raster
+// skipped is answered out of the buffers it should be answered from.
+assign cur = r0[1:0];
+assign nxt = r0[1:0] + 2'd1;
+
+// The pair this line needs, and only the pair.  The rows after it are fetched
+// two lines ahead and are not checked here: checking them is what would force a
+// one-line deadline on the fetch, and a row fetch does not fit in one line.
+wire pair_now = win_ok && bval[cur] && brow[cur] == r0 &&
+                bval[nxt] && brow[nxt] == r_ok &&
+                bcrs[cur] == cfall && bcrs[nxt] == cfall;
+
+// How long the video stage gives a line.  A 1280-pixel line is 1650 clocks at
+// 74.25 MHz and the emit is 1280 of them, so a line may begin up to the
+// difference late and still fit inside its own period.  Measured, not assumed:
+// the period is the video stage's property, not this module's, and the slack is
+// what lets a row fetch that overruns the emit land instead of taking the
+// blocking path.  One row fetch is a shade longer than the emit, so without this
+// every second line found its prefetched row still arriving, blocked for three
+// refetches, and the picture lost more than half its lines.
+always @(posedge clk or negedge resetn) begin
+    if (!resetn) begin
+        cy_seen  <= 10'd0;
+        line_cnt <= 16'd0;
+        slack    <= 16'd0;
+    end else if (cy != cy_seen) begin
+        cy_seen  <= cy;
+        line_cnt <= 16'd0;
+        slack    <= (line_cnt > (OUT_W[15:0] + 16'd24)) ?
+                    (line_cnt - OUT_W[15:0] - 16'd24) : 16'd0;
+    end else line_cnt <= line_cnt + 16'd1;
+end
+
 always @(posedge clk or negedge resetn) begin
     if (!resetn) begin
         st <= S_IDLE; cy_d <= 10'h3FF; acc_y <= 32'd0; r0 <= 32'd0; r1 <= 32'd0;
         wy <= 16'd0; k0 <= 32'd0; emit_x <= 16'd0; acc_x <= 32'd0;
-        cur <= 2'd0; nxt <= 2'd1; fre <= 2'd2; block_step <= 3'd0;
+        block_step <= 3'd0;
         rd_idx <= {AIDX{1'b0}};
         rd_start <= 1'b0; rd_addr <= 25'd0; rd_count <= 16'd0;
         brow[0] <= 32'hFFFFFFFF; brow[1] <= 32'hFFFFFFFF; brow[2] <= 32'hFFFFFFFF;
-        bval <= 3'b000; col_tag <= 32'hFFFFFFFF;
+        brow[3] <= 32'hFFFFFFFF;
+        bval <= 4'b0000; col_tag <= 32'hFFFFFFFF;
         f_req <= 1'b0; f_busy <= 1'b0; f_ack <= 1'b0; f_buf <= 2'd0;
         f_missed <= 1'b0; retry_cnt <= 21'd0; block_retry <= 3'd0;
-        cfall <= 1'b0; bcrs <= 3'b000;
+        cfall <= 1'b0; bcrs <= 4'b0000;
         stream_d <= 1'b0;
         f_j <= {AIDX{1'b0}}; f_row <= 32'd0; f_col <= 32'd0;
         f_base <= 25'd0; f_cnt <= 16'd0;
@@ -331,9 +387,10 @@ always @(posedge clk or negedge resetn) begin
         if (f_busy) begin
             if (src_we) begin
                 case (f_buf)
-                    2'd0: lb0[src_idx] <= src_data;
-                    2'd1: lb1[src_idx] <= src_data;
-                    default: lb2[src_idx] <= src_data;
+                    2'd0:   lb0[src_idx] <= src_data;
+                    2'd1:   lb1[src_idx] <= src_data;
+                    2'd2:   lb2[src_idx] <= src_data;
+                    default: lb3[src_idx] <= src_data;
                 endcase
             end
             if (src_done) begin
@@ -433,14 +490,16 @@ always @(posedge clk or negedge resetn) begin
         end
 
         S_ROWS: begin
-            r_ok <= row_ok;
-            r_pf <= pf_row;
-            st   <= S_RADDR;
+            r_ok  <= row_ok;
+            r_pf  <= pf_row;
+            r_pf3 <= pf_row3;
+            st    <= S_RADDR;
         end
 
         S_RADDR: begin
-            r_addr <= r_pf[15:0] * level_w;
-            st     <= S_PLAN;
+            r_addr  <= r_pf[15:0] * level_w;
+            r_addr3 <= r_pf3[15:0] * level_w;
+            st      <= S_PLAN;
         end
 
         S_PLAN: begin
@@ -450,41 +509,33 @@ always @(posedge clk or negedge resetn) begin
             // from the pixel's own entry index, so it has to be the coarse start
             // when the rows came from the level below
             k0 <= k0_e;
-            if (win_ok && bval[cur] && brow[cur] == r0 &&
-                bval[nxt] && brow[nxt] == r_ok &&
-                bcrs[cur] == cfall && bcrs[nxt] == cfall) begin
-                // pair present: prefetch the third row while this line draws
-                if (!f_busy && !f_req && pf_want) begin
-                    f_req  <= 1'b1; f_buf <= fre; f_row <= r_pf_e; f_cnt <= cnt_e;
-                    f_col  <= k0_e;
-                    f_base <= level_base + r_addr + {1'b0, k0_pf[22:0], 1'b0};
-                end
+            if (pair_now) begin
                 emit_x <= 16'd0; acc_x <= src_x0; rd_idx <= {AIDX{1'b0}};
                 st <= S_EMIT;
-            end else if (win_ok && bval[nxt] && brow[nxt] == r0 &&
-                         bval[fre] && brow[fre] == r_ok &&
-                         bcrs[nxt] == cfall && bcrs[fre] == cfall) begin
-                // one line on: rotate; the prefetched row becomes this line's second
-                cur <= nxt; nxt <= fre; fre <= cur;
-                if (!f_busy && !f_req && pf_want) begin
-                    f_req  <= 1'b1; f_buf <= cur; f_row <= r_pf_e; f_cnt <= cnt_e;
-                    f_col  <= k0_e;
-                    f_base <= level_base + r_addr + {1'b0, k0_pf[22:0], 1'b0};
-                end
-                emit_x <= 16'd0; acc_x <= src_x0; rd_idx <= {AIDX{1'b0}};
-                st <= S_EMIT;
+            end else if (f_busy && line_cnt < slack) begin
+                // The row this line wants is the one already being fetched, and
+                // this line still has clocks to spare.  Wait for it: the blocking
+                // path below refetches both rows and a third, which costs more
+                // than a line has.  Falling through costs one line once; not
+                // waiting when we could have costs every second line.
+                st <= S_HOLD;
             end else begin
-                cur <= 2'd0; nxt <= 2'd1; fre <= 2'd2;
                 block_step <= 3'd0;
                 st <= S_BFETCH;
             end
+        end
+
+        // Waiting for a row that is in flight, as long as the line can afford it.
+        S_HOLD: begin
+            if (pair_now)                               st <= S_PLAN;
+            else if (!f_busy || line_cnt >= slack)      st <= S_BFETCH;
         end
 
         // blocking fetch of both rows, used at a discontinuity
         S_BFETCH: begin
             case (block_step)
             3'd0: if (!f_busy) begin
-                f_req  <= 1'b1; f_buf <= 2'd0; f_row <= r0_e; f_cnt <= cnt_e;
+                f_req  <= 1'b1; f_buf <= r0[1:0]; f_row <= r0_e; f_cnt <= cnt_e;
                 f_col  <= k0_e;
                 f_base <= level_base + (r0 * level_w) + {1'b0, k0_pf[22:0], 1'b0};
                 block_step <= 3'd1;
@@ -494,7 +545,7 @@ always @(posedge clk or negedge resetn) begin
                                           block_retry <= 3'd0; block_step <= 3'd7; end
             3'd2: block_step <= 3'd3;               // one clear cycle between requests
             3'd3: if (!f_busy) begin
-                f_req  <= 1'b1; f_buf <= 2'd1; f_row <= (cfall ? (r1 >> 1) : r1);
+                f_req  <= 1'b1; f_buf <= r1[1:0]; f_row <= (cfall ? (r1 >> 1) : r1);
                 f_cnt  <= cnt_e;
                 f_col  <= k0_e;
                 f_base <= level_base + (r1 * level_w) + {1'b0, k0_pf[22:0], 1'b0};
@@ -512,7 +563,7 @@ always @(posedge clk or negedge resetn) begin
             // pan; paying for the fetch here costs one row on the single line
             // that had to block anyway.
             3'd5: if (!f_busy && !f_req) begin
-                f_req  <= 1'b1; f_buf <= 2'd2; f_row <= r_pf_e; f_cnt <= cnt_e;
+                f_req  <= 1'b1; f_buf <= r_pf[1:0]; f_row <= r_pf_e; f_cnt <= cnt_e;
                 f_col  <= k0_e;
                 f_base <= level_base + r_addr + {1'b0, k0_pf[22:0], 1'b0};
                 block_step <= 3'd6;
@@ -522,6 +573,14 @@ always @(posedge clk or negedge resetn) begin
                 block_retry <= 3'd5;
                 block_step  <= 3'd7;
             end else if (f_ack) begin
+                // The third buffer is this line's reserve and has landed.  The
+                // fourth is the row two lines on, and it has to be started here:
+                // the path that draws normally starts it from S_EMIT, and this
+                // path has not reached S_EMIT yet.  Without it the line two on
+                // finds its first row still fetched from an older frame.
+                f_req      <= 1'b1; f_buf <= r_pf3[1:0]; f_row <= r_pf3_e; f_cnt <= cnt_e;
+                f_col      <= k0_e;
+                f_base     <= level_base + r_addr3 + {1'b0, k0_pf[22:0], 1'b0};
                 emit_x     <= 16'd0;
                 acc_x      <= src_x0;
                 rd_idx     <= {AIDX{1'b0}};
@@ -549,9 +608,26 @@ always @(posedge clk or negedge resetn) begin
             if (emit_x == OUT_W - 1) st <= S_DONE;
         end
 
+        // The line is drawn.  Nothing to rotate: the buffer a row lives in is its
+        // own row number modulo four, so the next line's pair is already named.
         S_DONE: st <= S_IDLE;
         default: st <= S_IDLE;
         endcase
+
+        // The row two lines on is asked for as soon as the channel is free,
+        // rather than at the plan.  Asking at the plan loses requests: at two
+        // clocks an entry the channel is still busy with the row started a line
+        // ago, the request is dropped, and two lines later the pair check finds a
+        // row that was never fetched.  One dropped prefetch cost a blocking path
+        // -- three refetches plus the line's place in the raster.
+        if (!f_busy && !f_req && pf_want && st == S_EMIT) begin
+            f_req  <= 1'b1;
+            f_buf  <= r_pf3[1:0];
+            f_row  <= r_pf3_e;
+            f_cnt  <= cnt_e;
+            f_col  <= k0_e;
+            f_base <= level_base + r_addr3 + {1'b0, k0_pf[22:0], 1'b0};
+        end
 
         // Changing the picture's source abandons whatever fetch was in flight.
         // The video channel is muxed on the same signal, so a linear fetch that
@@ -569,7 +645,7 @@ always @(posedge clk or negedge resetn) begin
             rd_start  <= 1'b0;
             seq_start <= 1'b0;
             block_step <= 3'd0;
-            bval      <= 3'b000;
+            bval      <= 4'b0000;
             cfall     <= 1'b0;
             st        <= S_IDLE;
         end
