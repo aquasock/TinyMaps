@@ -59,6 +59,7 @@ maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TSIZE), .TENT(TENT), .TW(TW)) dut (
     .we(we), .widx(widx), .wdata(wdata),
     .lk_valid(lk_valid), .lk_tx(lk_tx), .lk_ty(lk_ty),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
+    .dbg_hit_level(), .dbg_hit_tx(), .dbg_hit_ty(), .dbg_hit_addr(),
     .rd_start(rd_start), .rd_addr(rd_addr), .rd_count(rd_count),
     .rd_data(rd_data), .rd_valid(rd_valid));
 

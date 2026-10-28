@@ -74,6 +74,9 @@ wire [23:0] out_rgb;
 wire [7:0]  out_idx;
 wire        out_valid;
 wire [1:0]  seq_level;
+wire [1:0]  dh_level;
+wire [14:0] dh_tx, dh_ty;
+wire [24:0] dh_addr;
 wire [2:0]  dbg_state;
 wire        seq_start;
 wire [13:0] seq_entry;
@@ -125,6 +128,7 @@ maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TSIZE), .TENT(TENT), .TW(TW)) u_seq (
     .we(seq_we), .widx(seq_widx), .wdata(seq_wdata),
     .lk_valid(lk_valid), .lk_tx(lk_tx), .lk_ty(lk_ty),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
+    .dbg_hit_level(dh_level), .dbg_hit_tx(dh_tx), .dbg_hit_ty(dh_ty), .dbg_hit_addr(dh_addr),
     .rd_start(rd_start), .rd_addr(rd_addr), .rd_count(rd_count),
     .rd_data(rd_data), .rd_valid(rd_valid));
 
@@ -448,6 +452,8 @@ initial begin
     want(oob == 0, "no tile outside the grid was asked for");
     $display("  at the edge: %0d pixels, %0d outside the grid", seen, oob);
 
+    $display("  instrument: last hit L%0d tile %0d,%0d at %08h",
+             dh_level, dh_tx, dh_ty, dh_addr);
     if (errors) $display("RESULT: FAIL (%0d errors)", errors);
     else        $display("RESULT: PASS (a miss becomes a request, an answer becomes a line)");
     $finish;

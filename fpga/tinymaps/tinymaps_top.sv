@@ -203,6 +203,10 @@ wire        vrd_rd_valid;
 // 0x1E: with nothing answering, streaming mode is an empty pool and a blank
 // picture, so the mode is the host's to choose and not the bitstream's.
 wire        stream_on;
+wire        dbg_fallback;
+wire [1:0]  dbg_hit_level;
+wire [14:0] dbg_hit_tx, dbg_hit_ty;
+wire [24:0] dbg_hit_addr;
 reg  [1:0]  LEVEL_N = 2'd0;
 wire [1:0]  seq_level;
 wire        seq_start;
@@ -355,6 +359,7 @@ maps_render #(.OUT_W(OUT_W), .OUT_H(OUT_H), .SPAN(SPAN)) u_render (
     .rd_start(rnd_rd_start), .rd_addr(rnd_rd_addr), .rd_count(rnd_rd_count),
     .rd_data(vrd_rd_data), .rd_valid(vrd_rd_valid),
     .stream(stream_on), .tile_level(LEVEL_N[1:0]), .seq_level(seq_level),
+    .dbg_fallback(dbg_fallback),
     .seq_start(seq_start), .seq_entry(seq_entry),
     .seq_row(seq_row), .seq_span(seq_span),
     .seq_we(seq_we), .seq_widx(seq_widx), .seq_wdata(seq_wdata),
@@ -439,6 +444,8 @@ maps_tile_fetch #(.SPAN(SPAN), .TSIZE(TILE_PX), .TENT(TILE_PX / 2),
     .we(seq_we), .widx(seq_widx), .wdata(seq_wdata),
     .lk_valid(lk_valid), .lk_tx(lk_tx), .lk_ty(lk_ty),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
+    .dbg_hit_level(dbg_hit_level), .dbg_hit_tx(dbg_hit_tx),
+    .dbg_hit_ty(dbg_hit_ty), .dbg_hit_addr(dbg_hit_addr),
     .rd_start(sq_rd_start), .rd_addr(sq_rd_addr), .rd_count(sq_rd_count),
     .rd_data(vrd_rd_data), .rd_valid(vrd_rd_valid));
 
@@ -479,6 +486,9 @@ maps_link_rx #(.TILES(1'b1), .TBYTES(TILE_PX * TILE_PX)) u_loader (
     .st_base(LEVEL_BASE), .st_w(LEVEL_W), .st_h(LEVEL_H), .st_step(STEP),
     .st_x0(SRC_X0), .st_y0(SRC_Y0), .st_rstate(render_state),
     .req_depth(req_depth),
+    // what the streaming path last did, for the status command
+    .dbg_fallback(dbg_fallback), .dbg_level(dbg_hit_level),
+    .dbg_tx(dbg_hit_tx), .dbg_ty(dbg_hit_ty), .dbg_addr(dbg_hit_addr),
     .lv_valid(lv_valid),
     .lv_base0(lv_base0), .lv_base1(lv_base1),
     .lv_base2(lv_base2), .lv_base3(lv_base3),

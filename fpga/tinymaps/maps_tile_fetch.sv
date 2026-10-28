@@ -62,6 +62,12 @@ module maps_tile_fetch #(
     input  wire        lk_hit,
     input  wire [24:0] lk_addr,
 
+    // for the status command: the last tile that was found, latched with its
+    // address so the pair is a fact and not two live wires sampled together
+    output reg  [1:0]  dbg_hit_level,
+    output reg  [14:0] dbg_hit_tx, dbg_hit_ty,
+    output reg  [24:0] dbg_hit_addr,
+
     // the pool, through the video channel's own protocol
     output reg         rd_start,
     output reg  [24:0] rd_addr,
@@ -105,9 +111,15 @@ always @(posedge clk) begin
         lk_valid <= 1'b0; rd_start <= 1'b0; rd_addr <= 25'd0; rd_count <= 16'd0;
         f_level <= 2'd0; f_row <= 12'd0; f_entry <= 14'd0; f_end <= 14'd0; f_j <= '0;
         f_left <= 16'd0; f_take <= 16'd0;
+        dbg_hit_level <= 2'd0; dbg_hit_tx <= 15'd0; dbg_hit_ty <= 15'd0;
+        dbg_hit_addr <= 25'd0;
     end else begin
         we <= 1'b0; done <= 1'b0; miss <= 1'b0;
         miss_level <= 2'd0; miss_tx <= 15'd0; miss_ty <= 15'd0;
+        // dbg_hit_* is a latch: it holds until the next hit, so it is cleared on
+        // reset and nowhere else.  Cleared here it would be wiped every cycle,
+        // which is what made the status command report a hit that never happened
+        // and cost a hardware run.
         lk_valid <= 1'b0; rd_start <= 1'b0;
 
         case (st)
@@ -136,6 +148,10 @@ always @(posedge clk) begin
         F_WAIT2: st <= F_ISSUE;      // the table has registered the question here
 
         F_ISSUE: if (lk_hit) begin
+            dbg_hit_level <= f_level;
+            dbg_hit_tx    <= lk_tx;
+            dbg_hit_ty    <= lk_ty;
+            dbg_hit_addr  <= lk_addr;
             rd_addr  <= lk_addr + {9'd0, byte_off};
             rd_count <= take;
             f_take   <= take;

@@ -1573,3 +1573,40 @@ Deploy `tinymaps.aae022f453bf.bin` when the board is back and repeat the finest-
 - User Test: NOT RUN
 
 ---
+
+## 46 COMMIT Unreleased 2026-10-27T17:56:22-07:00
+
+#### Coming From:
+
+Unreleased 54455c9
+
+#### Purpose:
+
+Build the instrument the last several hardware runs needed: a way to see, from the host, which level and which tile the core is actually drawing from and where it read it.
+
+#### Outcome:
+
+The status command now answers four things it never did -- whether the picture is being drawn from the level below or the view's own level, and for the last successful lookup the level, the tile's coordinates and the pool address, all latched together so the pair is one fact rather than two live wires sampled at the same moment. The renderer exports its fallback flag, the sequencer latches the hit's coordinates with its address, and `tools/read_status.py` prints the slot the address implies beside the slot the table's hash would give for those coordinates -- which is the check that matters, because if the two disagree the core is reading a different tile from the one the host delivered and that is the glitched, stretched picture explained. Writing it found a bug in the instrument itself, and it is the third of its kind in this project: the new latch was cleared in the per-cycle default block instead of in reset, so it was wiped every cycle and reported that no lookup had ever hit, on hardware and in simulation both. One board run was spent reading a lie before the simulation caught it, which is the right order and the opposite of how the rest of the day went. With the clear moved to reset the simulation reports a self-consistent pair, level 1 tile 5,0 at 0x00118000, which is slot 6, and the table's hash for that tile is six. Also added: `tools/check_capture.py`, which renders what the pack says the viewport should show and compares a capture against it in standardised brightness -- that is how the user's settled frame was shown to match no region of the map at any level, which is what turned the search from rendering faults towards addressing. Seventeen of seventeen testbenches pass with `check_render` and `check_tmds`, and seed 1 packs at 84.68 MHz. Nothing was deployed, on the user's instruction, so the board still runs the previous build. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy `tinymaps.f043c71f8be2.bin` when the user says so, serve a level-0 view until it settles, and read the status: the printed slot and the table's slot for the same tile either agree, which sends the search into the pixels within a tile -- the row stride or the window base -- or disagree, which names the addressing. The capture tool is there to confirm either answer against a screenshot with the same viewport.
+
+#### Files Modified:
+
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/maps_render.sv
+- fpga/tinymaps/maps_tile_fetch.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/tb_maps_stream.sv
+- sim/tb_maps_tile_fetch.sv
+- tools/check_capture.py
+- tools/read_status.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

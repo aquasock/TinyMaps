@@ -50,13 +50,13 @@ def main():
         port.write(frame(b"\x00", CMD_STATUS))     # one dummy byte: a bare command is dropped
         got = b""
         end = time.monotonic() + 3.0
-        while len(got) < 23 and time.monotonic() < end:
+        while len(got) < 30 and time.monotonic() < end:
             got += port.read(64)
     finally:
         port.close()
 
-    if len(got) < 23:
-        print(f"FAILED: {len(got)} of 23 bytes back: {got.hex()}")
+    if len(got) < 30:
+        print(f"FAILED: {len(got)} of 30 bytes back: {got.hex()}")
         return 1
 
     base, w, h, step, x0, y0, st = struct.unpack("<IHHIII", got[:20]) + (got[20],)
@@ -66,6 +66,14 @@ def main():
     print(f"renderer   {STATES.get(st, st)}")
     print(f"source     {'tile pool' if got[21] else 'the pack'}")
     print(f"requests   {got[22]} waiting")
+    level = got[24] & 3
+    tx, ty = got[25] & 0x7F, got[26] & 0x7F
+    addr = got[27] | (got[28] << 8) | (got[29] << 16)
+    print(f"fallback   {'yes: drawing the level below' if (got[23] & 2) else 'no: drawing the view level'}")
+    print(f"last hit   L{level} tile {tx},{ty} at pool {addr:#08x} "
+          f"(slot {(addr - 0x01C00000) // 16384 if addr >= 0x01C00000 else -1})")
+    print(f"           the table's slot for that tile is "
+          f"{(tx + 13 * ty + level) % 256}")
     return 0
 
 

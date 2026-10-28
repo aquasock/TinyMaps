@@ -190,8 +190,16 @@ module maps_link_rx #(
     input  wire signed [31:0] st_x0, st_y0,
     input  wire [2:0]  st_rstate,
 
-    // how many tile requests are waiting, for the status command
+    // how many tile requests are waiting, and what the streaming path is doing,
+    // for the status command.  A picture that looks wrong cannot be diagnosed
+    // from outside: these say which level the last fetch was for, which tile, and
+    // at what pool address, which is enough to check the host's answer against
+    // what the core read.
     input  wire [7:0]  req_depth,
+    input  wire        dbg_fallback,
+    input  wire [1:0]  dbg_level,
+    input  wire [14:0] dbg_tx, dbg_ty,
+    input  wire [24:0] dbg_addr,
 
     // status
     output reg         busy,
@@ -306,7 +314,14 @@ wire [7:0] ss_byte =
     (ss_i <  5'd20) ? st_y0[8*(ss_i - 5'd16) +: 8] :
     (ss_i == 5'd20) ? {5'd0, st_rstate} :
     (ss_i == 5'd21) ? {7'd0, stream_on} :
-                      req_depth;
+    (ss_i == 5'd22) ? req_depth :
+    (ss_i == 5'd23) ? {6'd0, dbg_fallback, 1'b0} :
+    (ss_i == 5'd24) ? {6'd0, dbg_level} :
+    (ss_i == 5'd25) ? {1'b0, dbg_tx[6:0]} :
+    (ss_i == 5'd26) ? {1'b0, dbg_ty[6:0]} :
+    (ss_i == 5'd27) ? dbg_addr[7:0] :
+    (ss_i == 5'd28) ? dbg_addr[15:8] :
+                      dbg_addr[23:16];
 
 // --------------------------------------------------------------- viewport ----
 // Command 0x0A.  Twenty bytes of body then its CRC, walked a byte at a time.
@@ -809,7 +824,7 @@ always @(posedge clk or negedge resetn) begin
             end else if (!tx_busy) begin
                 ss_wait <= 5'd0;
                 ss_i    <= ss_i + 5'd1;
-                if (ss_i == 5'd22) ss_active <= 1'b0;
+                if (ss_i == 5'd29) ss_active <= 1'b0;
             end
         end
 

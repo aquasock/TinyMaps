@@ -101,6 +101,10 @@ module maps_render #(
     // the level the sequencer is being asked about: the view's own, or the one
     // below it when the line is being drawn from the fallback
     output wire [1:0]  seq_level,
+    // for the status command: whether the picture is being drawn from the level
+    // below.  A picture that matches no region of the map is either drawn from
+    // the wrong place or from the wrong level, and only the design knows which.
+    output wire        dbg_fallback,
     output reg         seq_start,
     output reg  [13:0] seq_entry,
     output wire [11:0] seq_row,
@@ -282,6 +286,7 @@ wire [31:0] e_new  = (x_e + 32'd65536) >>> 17;
 // level 3 is the coarsest there is and falls back to nothing.
 wire       can_fall = (tile_level != 2'd3);
 assign seq_level = cfall ? (tile_level + 2'd1) : tile_level;
+assign dbg_fallback = cfall;
 wire [31:0] k0_now = (src_x0 + 32'd65536) >>> 17;
 // the window starts one entry early so the first pixel's previous entry is real
 wire [31:0] k0_pf  = (k0_now == 32'd0) ? 32'd0 : k0_now - 32'd1;
