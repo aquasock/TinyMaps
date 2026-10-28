@@ -175,14 +175,17 @@
   `tinymaps.46bc5de68231.bin` and now holds `tinymaps.8fe42ba24d8d.bin`; the
   board was running the loader build when the test image was loaded.
 
-- **On the Tang:** `/root/cores/console138k/tinymaps.a8ba28a06bf9.bin` is the
-  build running as of 2026-10-27 — seed 3, 85.48 MHz, the line-engine fix — and
-  its SDRAM holds all four levels of `work/pack/phoenix-18km.tmpk` loaded with
-  `tools/load_pack.py --levels all`. `tangload` programs the FPGA from the shell
-  or from `TinyTang/tools/tinytang_run.py`, and a load that does not print
+- **On the Tang:** nothing of this project is loaded at handoff. The board ran
+  `tinymaps.a8ba28a06bf9.bin` (seed 3, 85.48 MHz, the line-engine fix) with all
+  four levels of `work/pack/phoenix-18km.tmpk` in its SDRAM for the hardware test
+  that passed, and its SDRAM still holds them; it now runs TinyGBC's core and
+  player instead, because the session ended chasing the user's cartridge-launch
+  fault in TinyTang. `tangload` programs the FPGA from the shell or from
+  `TinyTang/tools/tinytang_run.py`, and a load that does not print
   `tangload: core loaded` did nothing. The load is to SRAM, so a power cycle
-  returns the console core. `tinymaps.bin` on the card is an older image and not
-  what the board is running.
+  returns the console core. The image to deploy next is
+  `build/seed-3/open/tinymaps.f2ce7db24819.bin` — 82.61 MHz, the instrument build
+  — which has not been on the board yet.
 
 - **Decisions that must not be re-litigated:**
   - **Fabric-only loader, no AE350.** The load is a memcpy with a checksum; an
