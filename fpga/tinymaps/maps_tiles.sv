@@ -77,6 +77,9 @@ module maps_tiles #(
     // how often it has answered either way, for the link's status command
     output reg  [15:0] hits,
     output reg  [15:0] misses,
+    // and how many tiles have been committed, which is the number that separates
+    // "the host never delivered it" from "it was delivered and did not land"
+    output reg  [15:0] commits,
     output wire        idle
 );
 
@@ -112,6 +115,7 @@ reg [SLOTS-1:0] vbit;              // flip-flops: whether it holds anything
 reg          pend = 1'b0;          // a lookup was presented last cycle
 reg [SW-1:0] pend_slot = '0;
 reg [31:0]   pend_tag = 32'd0;
+reg          lk_miss = 1'b0;       // the lookup just presented found nothing
 
 // the address is the hash and nothing else, so it needs no state: the loader can
 // ask where a tile's bytes belong the cycle it knows the coordinates, and write
@@ -122,8 +126,8 @@ always @(posedge clk) begin
     if (!resetn) begin
         pend <= 1'b0;
         vbit <= '0;
-        lk_hit <= 1'b0; lk_addr <= 25'd0;
-        hits <= 16'd0; misses <= 16'd0;
+        lk_hit <= 1'b0; lk_addr <= 25'd0; lk_miss <= 1'b0;
+        hits <= 16'd0; misses <= 16'd0; commits <= 16'd0;
     end else begin
         if (lk_valid) begin
             pend      <= 1'b1;
@@ -143,18 +147,35 @@ always @(posedge clk) begin
             vbit[fill_slot_h] <= 1'b1;
         end
 
-        lk_hit <= 1'b0;
+        lk_hit  <= 1'b0;
+        lk_miss <= 1'b0;
         if (pend) begin
             // the tag read this cycle is the one at pend_slot; a commit in the
             // same cycle lands after it, which is the ordering a cache promises
             if (vbit[pend_slot] && tag[pend_slot] == pend_tag) begin
                 lk_hit  <= 1'b1;
                 lk_addr <= POOL_BASE[24:0] + (pend_slot << TBITS);
-                hits    <= hits + 16'd1;
             end else begin
-                misses <= misses + 16'd1;
+                lk_miss <= 1'b1;
             end
         end
+    end
+end
+
+// The counters are driven from the registered verdict, not from the comparator.
+// Counted from the compare they put a sixteen-bit adder behind a thirty-two bit
+// equality term; that term was already the longest path in the table, and making
+// the tally visible in the status command (it used to be optimised away, both
+// outputs dangling) took hclk from 82.52 to 72.88 MHz at seed 3.  A register
+// between the comparison and the count costs one cycle of tally and nothing in
+// the picture.
+always @(posedge clk) begin
+    if (!resetn) begin
+        hits <= 16'd0; misses <= 16'd0; commits <= 16'd0;
+    end else begin
+        if (lk_hit)       hits    <= hits + 16'd1;
+        else if (lk_miss) misses  <= misses + 16'd1;
+        if (fill_commit)  commits <= commits + 16'd1;
     end
 end
 

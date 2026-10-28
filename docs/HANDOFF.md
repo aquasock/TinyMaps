@@ -110,19 +110,45 @@
   fine tile; that is fixed and bracketed by `sim/tb_maps_stream_epoch.sv`
   (pre-fix: still in fallback after 400 lines, no fine request; fixed: retries
   at line 337). What is still open is whether a delivered tile becomes resident.
-  On hardware the core asks for two to eight distinct tiles over and over, the
-  host answers each with sixteen blocks and every block is acknowledged, and the
-  core asks again. Three serve sessions in a row ended with the board gone from
-  USB within about thirty seconds — `write failed: [Errno 19] No such device`, a
-  request frame carrying a nonsense tile coordinate, then no `/dev/ttyACM` — so
-  part of that behaviour may be a board that is leaving rather than a pool that
-  is not filling, and the dead main power input is the first thing to suspect.
-  The next move is an instrument, not another guess: `maps_tiles` already counts
-  `hits` and `misses`, they are wired to nothing, and putting them plus a commit
-  counter through the status command answers "is a delivered tile resident" in
-  one rebuild and one run. `sim/tb_maps_stream_wide.sv` is a first attempt at the
-  same question at the top's geometry and is deliberately not in the suite: its
-  pixel mismatches are its own line pacing, not the design's.
+  On hardware the pool path draws a vertically smeared picture, the host serves
+  tiles that are acknowledged, and the core asks again for two to eight distinct
+  tiles of the ninety a screen needs. Power was part of it: three serve sessions
+  on USB port power ended with the board gone from USB within about thirty
+  seconds (`write failed: [Errno 19] No such device`, a request frame carrying a
+  nonsense tile coordinate, then no `/dev/ttyACM`), and on the bench supply at
+  4.5 V a session survived instead. Note 4.2 V is the recorded maximum for
+  +BATT and the supply was left above it. The instrument is now built and **not
+  deployed**: `maps_tiles` counts `hits`, `misses` and `commits` from its
+  registered verdict, the status command carries them in bytes 30-35 with the
+  request queue's hold in byte 36, and `read_status.py` prints them. Counting
+  them from the comparator cost 82.52 -> 72.88 MHz at seed 3 and was refused by
+  the flow; counted from the register it is 82.61 MHz with the counters in.
+  `build/seed-3/open/tinymaps.f2ce7db24819.bin` is the artefact to deploy.
+  `sim/probe_stream_wide.sv` is a probe, not a testbench, and is named that way
+  so `tools/run_sim.sh`'s `tb_*` glob leaves it alone: its pixel mismatches are
+  its own line pacing, not the design's.
+
+- **Outside this tree — the desktop cannot launch a cartridge.** The user's GBC
+  and NES games fail from a desktop double-click: the core loads, colour bars
+  appear, then nothing. A hand-run from the console of exactly those two steps
+  -- `tangload /root/cores/console138k/tinygbc.bin` then
+  `ae350run /root/ae350/tinygbc-play.elf '/root/media/gbc/A/<game>.zip'` --
+  loaded the cartridge perfectly, so the cores, the card, the ROMs, the link's
+  2 Mbaud rate and the player are all sound, and the fault is in TinyTang's
+  launch path. What is known about it: the desktop's Library launch and
+  `ae350run` call the same `tang_ae350_run()`, and `tangload` and the desktop's
+  core load call the same `fpga_program()`, so neither mechanism differs; the
+  cartridge path is built correctly as `/sd` plus the shown path; the send path
+  is malloc-free by design because 8 KiB of contiguous heap is not there with
+  the desktop resident (a refused malloc on 2026-10-14); and the link rate is a
+  session variable that resets to 2 Mbaud at boot and is forced to 2 Mbaud
+  before a JTAG load, so a stale 5 Mbaud cannot be the cause. The reason a
+  desktop launch says nothing is that `tang_ae350_run()` logs `--- run` *before*
+  it opens the cartridge and every diagnostic after that is `tdsh_printf`, which
+  needs a shell session the launch task does not have. The next move there is to
+  log the cartridge open, the ELF load, the settings request and the transfer's
+  completion through `ae350_log()` into `/root/saves/last.log`. That is TinyTang's
+  repository and the user is taking it there.
 
 - **The main power input is dead.** Measured 2026-10-26 after the link dropped
   during a pack load: 1.4 V at 1.5 A from a bench supply on that port (about

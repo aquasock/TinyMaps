@@ -1735,3 +1735,37 @@ Settle the USB drop before blaming the fabric: power the board from the battery 
 - User Test: PASS
 
 ---
+
+## 51 COMMIT Unreleased 2026-10-27T22:15:00-07:00
+
+#### Coming From:
+
+Unreleased a08d56b
+
+#### Purpose:
+
+Build the instrument the streaming question could not be answered without: the page table's own tally, readable from the host.
+
+#### Outcome:
+
+`maps_tiles` already had `hits` and `misses` outputs and they were wired to nothing, so the compiler removed the arithmetic behind them; a `commits` counter was added beside them, and the link's status command grew from thirty bytes to thirty-seven to carry all three plus whether the request queue is holding the line. `tools/read_status.py` prints them. Counting them from the comparator was the first attempt and it does not fit in the clock: a sixteen-bit adder behind the thirty-two-bit tag comparison took `hclk` from 82.52 to **72.88 MHz** at seed 3, and the flow refused to pack it, which is the flow doing its job. Counting from the registered verdict instead -- one cycle later, and invisible in the picture -- puts it back to **82.61 MHz** with the counters in, and nineteen benches plus `check_render` and `check_tmds` pass. Two smaller things changed with it: `tb_maps_stream_wide.sv` became `sim/probe_stream_wide.sv`, because `tools/run_sim.sh` globs `sim/tb_*.sv` and that probe's pixel mismatches are its own line pacing rather than the design's, so it was a false failure sitting in the suite; and `serve_tiles.py` no longer dies with an IndexError when it reports an ignored short frame, which is what ended three serve sessions and looked like the core giving up. What was **not** done: nothing was deployed and no hardware test ran, on the user's instruction. The state it was built to answer is unchanged and open -- on hardware the pool path draws a vertically smeared picture, the host serves tiles that are acknowledged, and the core re-asks for two to eight distinct tiles of the ninety a screen needs. The instrument exists so the next session asks the core which of those it is instead of inferring it from outside, which is what the previous four sessions did. Separately, and outside this tree: the user's GBC and NES cartridges failing to launch from the desktop was narrowed to TinyTang's launch path, where `tang_ae350_run` writes `ae350_log("--- run")` before it opens the cartridge and every diagnostic after that needs a shell session the desktop's launch task does not have, so a desktop launch fails silently; a hand-run of `tangload` and `ae350run` from the console loaded the same cartridge perfectly, which places the fault in that path and not in the cores, the card or the link rate. That work belongs to TinyTang's repository and the user is taking it there. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy `build/seed-3/open/tinymaps.f2ce7db24819.bin` when the board is free, then the short run this was built for: tangload, level table, level-0 view, read status for a baseline, serve with `--once` for about fifteen seconds, stop the server and read status again. `commits 0` with misses climbing means nothing lands; commits climbing with hits near zero means tiles land and the table cannot find them; hits climbing means the pool is serving and the smear is downstream of it. The board needs a power cycle first, and the PSU rather than USB: streaming dropped the USB link three times on port power and has not dropped it on the supply.
+
+#### Files Modified:
+
+- fpga/tinymaps/maps_tiles.sv
+- fpga/tinymaps/maps_link_rx.sv
+- fpga/tinymaps/tinymaps_top.sv
+- sim/probe_stream_wide.sv
+- tools/read_status.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---

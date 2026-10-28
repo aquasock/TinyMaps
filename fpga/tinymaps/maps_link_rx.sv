@@ -196,6 +196,12 @@ module maps_link_rx #(
     // at what pool address, which is enough to check the host's answer against
     // what the core read.
     input  wire [7:0]  req_depth,
+    // the page table's own tally, which is what answers "is a delivered tile
+    // resident" from inside the core instead of inferring it from the host side
+    input  wire [15:0] tk_hits,
+    input  wire [15:0] tk_misses,
+    input  wire [15:0] tk_commits,
+    input  wire [7:0]  req_held,       // 1 while the request queue owns the line
     input  wire        dbg_fallback,
     input  wire [1:0]  dbg_level,
     input  wire [14:0] dbg_tx, dbg_ty,
@@ -295,8 +301,8 @@ endfunction
 
 // ---------------------------------------------------------------- status ----
 reg        ss_active;
-reg [4:0]  ss_i;
-reg [4:0]  ss_wait;
+reg [5:0]  ss_i;
+reg [5:0]  ss_wait;
 
 // the base is twenty-five bits, and a byte taken from it has to be zero-extended
 // or the top byte reads out of range: the status command reported 0xafaee3d8 for
@@ -304,24 +310,31 @@ reg [4:0]  ss_wait;
 wire [31:0] st_base32 = {7'd0, st_base};
 
 wire [7:0] ss_byte =
-    (ss_i <  5'd4)  ? st_base32[8*ss_i[1:0] +: 8] :
-    (ss_i == 5'd4)  ? st_w[7:0] :
-    (ss_i == 5'd5)  ? st_w[15:8] :
-    (ss_i == 5'd6)  ? st_h[7:0] :
-    (ss_i == 5'd7)  ? st_h[15:8] :
-    (ss_i <  5'd12) ? st_step[8*(ss_i - 5'd8) +: 8] :
-    (ss_i <  5'd16) ? st_x0[8*(ss_i - 5'd12) +: 8] :
-    (ss_i <  5'd20) ? st_y0[8*(ss_i - 5'd16) +: 8] :
-    (ss_i == 5'd20) ? {5'd0, st_rstate} :
-    (ss_i == 5'd21) ? {7'd0, stream_on} :
-    (ss_i == 5'd22) ? req_depth :
-    (ss_i == 5'd23) ? {6'd0, dbg_fallback, 1'b0} :
-    (ss_i == 5'd24) ? {6'd0, dbg_level} :
-    (ss_i == 5'd25) ? {1'b0, dbg_tx[6:0]} :
-    (ss_i == 5'd26) ? {1'b0, dbg_ty[6:0]} :
-    (ss_i == 5'd27) ? dbg_addr[7:0] :
-    (ss_i == 5'd28) ? dbg_addr[15:8] :
-                      dbg_addr[23:16];
+    (ss_i <  6'd4)  ? st_base32[8*ss_i[1:0] +: 8] :
+    (ss_i == 6'd4)  ? st_w[7:0] :
+    (ss_i == 6'd5)  ? st_w[15:8] :
+    (ss_i == 6'd6)  ? st_h[7:0] :
+    (ss_i == 6'd7)  ? st_h[15:8] :
+    (ss_i <  6'd12) ? st_step[8*(ss_i - 6'd8) +: 8] :
+    (ss_i <  6'd16) ? st_x0[8*(ss_i - 6'd12) +: 8] :
+    (ss_i <  6'd20) ? st_y0[8*(ss_i - 6'd16) +: 8] :
+    (ss_i == 6'd20) ? {5'd0, st_rstate} :
+    (ss_i == 6'd21) ? {7'd0, stream_on} :
+    (ss_i == 6'd22) ? req_depth :
+    (ss_i == 6'd23) ? {6'd0, dbg_fallback, 1'b0} :
+    (ss_i == 6'd24) ? {6'd0, dbg_level} :
+    (ss_i == 6'd25) ? {1'b0, dbg_tx[6:0]} :
+    (ss_i == 6'd26) ? {1'b0, dbg_ty[6:0]} :
+    (ss_i == 6'd27) ? dbg_addr[7:0] :
+    (ss_i == 6'd28) ? dbg_addr[15:8] :
+    (ss_i == 6'd29) ? dbg_addr[23:16] :
+    (ss_i == 6'd30) ? tk_hits[7:0] :
+    (ss_i == 6'd31) ? tk_hits[15:8] :
+    (ss_i == 6'd32) ? tk_misses[7:0] :
+    (ss_i == 6'd33) ? tk_misses[15:8] :
+    (ss_i == 6'd34) ? tk_commits[7:0] :
+    (ss_i == 6'd35) ? tk_commits[15:8] :
+                      req_held;
 
 // --------------------------------------------------------------- viewport ----
 // Command 0x0A.  Twenty bytes of body then its CRC, walked a byte at a time.
@@ -473,7 +486,7 @@ always @(posedge clk or negedge resetn) begin
         in_b4 <= 8'd0; in_b5 <= 8'd0; in_b6 <= 8'd0;
         key_px <= 16'sd0; key_py <= 16'sd0; key_zoom <= 2'sd0;
         nav_ev <= 1'b0; nav_px <= 16'sd0; nav_py <= 16'sd0; nav_zoom <= 2'sd0;
-        ss_active <= 1'b0; ss_i <= 5'd0; ss_wait <= 5'd0;
+        ss_active <= 1'b0; ss_i <= 6'd0; ss_wait <= 6'd0;
         st <= S_MAGIC; after_tx <= S_MAGIC;
         bidx <= 2'd0; cidx <= 2'd0; word <= 32'd0;
         img_addr <= 32'd0; img_len <= 32'd0; img_left <= 32'd0;
@@ -814,17 +827,17 @@ always @(posedge clk or negedge resetn) begin
         // One byte at a time through the same sender the replies use: hold
         // tx_start until the transmitter takes it, then wait for it to finish.
         if (ss_active) begin
-            if (ss_wait == 5'd0) begin
+            if (ss_wait == 6'd0) begin
                 tx_data  <= ss_byte;
                 tx_start <= 1'b1;
-                ss_wait  <= 5'd1;
-            end else if (ss_wait == 5'd1) begin
+                ss_wait  <= 6'd1;
+            end else if (ss_wait == 6'd1) begin
                 tx_start <= 1'b0;
-                ss_wait  <= 5'd2;
+                ss_wait  <= 6'd2;
             end else if (!tx_busy) begin
-                ss_wait <= 5'd0;
-                ss_i    <= ss_i + 5'd1;
-                if (ss_i == 5'd29) ss_active <= 1'b0;
+                ss_wait <= 6'd0;
+                ss_i    <= ss_i + 6'd1;
+                if (ss_i == 6'd36) ss_active <= 1'b0;
             end
         end
 

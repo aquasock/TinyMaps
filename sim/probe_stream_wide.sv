@@ -1,5 +1,16 @@
 // The streaming loop at the geometry the top builds.
 //
+// NOT a testbench and not in the suite: it is named probe_* so tools/run_sim.sh
+// does not pick it up, which is the point.  Its line pacing does not yet match a
+// raster at this width, so its pixel mismatches are its own rather than the
+// design's, and a false failure in the suite is worse than a probe that has to
+// be run by hand.  Run it with:
+//
+//     verilator --binary --timing -Wno-fatal -Wno-lint \
+//         --top-module probe_stream_wide -Mdir build/sim/probe_stream_wide \
+//         sim/probe_stream_wide.sv fpga/tinymaps/*.sv
+//
+//
 // The other streaming bench runs a 64-pixel line, where a 64-entry chunk
 // straddles tiles and the tile arithmetic is exercised by halves.  At 1280
 // pixels the window is 644 entries of 64-entry chunks against 128-pixel tiles,
@@ -31,7 +42,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 `timescale 1ns/1ps
 
-module tb_maps_stream_wide;
+module probe_stream_wide;
 
 localparam int OUT_W = 1280;
 localparam int OUT_H = 48;

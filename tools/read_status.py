@@ -50,13 +50,13 @@ def main():
         port.write(frame(b"\x00", CMD_STATUS))     # one dummy byte: a bare command is dropped
         got = b""
         end = time.monotonic() + 3.0
-        while len(got) < 30 and time.monotonic() < end:
+        while len(got) < 37 and time.monotonic() < end:
             got += port.read(64)
     finally:
         port.close()
 
-    if len(got) < 30:
-        print(f"FAILED: {len(got)} of 30 bytes back: {got.hex()}")
+    if len(got) < 37:
+        print(f"FAILED: {len(got)} of 37 bytes back: {got.hex()}")
         return 1
 
     base, w, h, step, x0, y0, st = struct.unpack("<IHHIII", got[:20]) + (got[20],)
@@ -74,6 +74,14 @@ def main():
           f"(slot {(addr - 0x01C00000) // 16384 if addr >= 0x01C00000 else -1})")
     print(f"           the table's slot for that tile is "
           f"{(tx + 13 * ty + level) % 256}")
+    # The page table's own tally.  A miss here with commits climbing means the
+    # tile was delivered and the table still cannot find it; misses without
+    # commits means nothing ever landed.
+    hits = got[30] | (got[31] << 8)
+    miss = got[32] | (got[33] << 8)
+    commits = got[34] | (got[35] << 8)
+    print(f"table      hits {hits}  misses {miss}  commits {commits}")
+    print(f"           request queue holds the line: {got[36] & 1}")
     return 0
 
 

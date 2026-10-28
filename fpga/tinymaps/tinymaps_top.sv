@@ -486,6 +486,8 @@ maps_link_rx #(.TILES(1'b1), .TBYTES(TILE_PX * TILE_PX)) u_loader (
     .st_base(LEVEL_BASE), .st_w(LEVEL_W), .st_h(LEVEL_H), .st_step(STEP),
     .st_x0(SRC_X0), .st_y0(SRC_Y0), .st_rstate(render_state),
     .req_depth(req_depth),
+    .tk_hits(tk_hits), .tk_misses(tk_misses), .tk_commits(tk_commits),
+    .req_held({7'd0, req_hold}),
     // what the streaming path last did, for the status command
     .dbg_fallback(dbg_fallback), .dbg_level(dbg_hit_level),
     .dbg_tx(dbg_hit_tx), .dbg_ty(dbg_hit_ty), .dbg_addr(dbg_hit_addr),
@@ -506,6 +508,10 @@ maps_link_rx #(.TILES(1'b1), .TBYTES(TILE_PX * TILE_PX)) u_loader (
 // remembers what it was told, which is what makes a tile the host sends land in
 // the reserved pool and be findable later.
 wire        fill_commit;
+// what the page table has answered, and how many tiles it has been told are
+// whole: three numbers that separate a tile the host never delivered from one
+// delivered and lost
+wire [15:0] tk_hits, tk_misses, tk_commits;
 wire        fill_inval;
 wire [1:0]  fill_level;
 wire [14:0] fill_tx, fill_ty;
@@ -519,7 +525,7 @@ maps_tiles #(.SLOTS(POOL_SLOTS), .TBYTES(TILE_PX * TILE_PX),
     .lk_hit(lk_hit), .lk_addr(lk_addr),
     .fill_commit(fill_commit), .fill_inval(fill_inval), .fill_level(fill_level),
     .fill_tx(fill_tx), .fill_ty(fill_ty), .fill_addr(fill_addr),
-    .hits(), .misses(), .idle()
+    .hits(tk_hits), .misses(tk_misses), .commits(tk_commits), .idle()
 );
 
 // ------------------------------------------------------------- line store ---
