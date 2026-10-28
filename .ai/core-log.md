@@ -1610,3 +1610,33 @@ Deploy `tinymaps.f043c71f8be2.bin` when the user says so, serve a level-0 view u
 - User Test: NOT RUN
 
 ---
+
+## 47 COMMIT Unreleased 2026-10-27T18:01:43-07:00
+
+#### Coming From:
+
+Unreleased ca999e1
+
+#### Purpose:
+
+Make the screen itself the measurement, since the picture is the only ground truth left that has not misled.
+
+#### Outcome:
+
+`tools/maps_pattern_pack.py` writes a tile pack whose tiles name themselves: each is a flat colour keyed to its own coordinates, with a white border on its top and left edges, and a binary code in its top-left corner giving its own `tx` and `ty`. The container is the same one `maps_pack.py tiles` writes and the level grids are the real pack's, so `serve_tiles.py` serves it and the same viewport applies without either tool knowing the difference -- the server's own selftest reassembles a 16 KiB tile from this pack and checks its CRCs. The palette is 256 distinct entries on three different odd steps, so an index is recoverable from a captured colour, and a tile decoded back from the file gives its own coordinates: tile (5,3) reads as tx 5, ty 3, flat index 26, borders white. That is what makes the picture readable rather than interpretable: a tile drawn in the wrong place is a wrong colour in the wrong square, a row stride that shears shows as a broken border running diagonally, and a window base that is off by an entry shows as a tile's worth of columns displaced by one. The reason for building it is the run before this one, where the status command's new fields could not answer whether the addressing was wrong: the coordinate and the address in that readout come from different stages of the pipeline -- `lk_addr` is the table's answer for the coordinates presented two cycles earlier while `lk_tx`/`lk_ty` are live wires -- so during retry churn they drift, and for one tile the same address appeared twice with different values. That reading is therefore recorded as unusable rather than as evidence. What that run did establish is that the picture is drawn from level 0 and not the fallback, that no tile outside the level's grid was asked for, and that 105 tiles committed and the requests stopped, so the 16 KiB fill path works. Nothing was deployed, on the user's instruction. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Deploy, serve a level-0 view from the pattern pack, and read the screen: the colour of each 128-pixel square names the tile that landed there and the corner code confirms it, so a misplaced tile, a shear or a displaced window becomes a specific, named fault rather than a description. That is the experiment that should have come before the last three fixes.
+
+#### Files Modified:
+
+- tools/maps_pattern_pack.py
+
+#### Status:
+
+- Build: N/A
+- Deployment: NOT RUN
+- User Test: NOT RUN
+
+---
