@@ -128,7 +128,13 @@ def serve(port, pk, blocks, count, quiet, once=False):
             req = request(frame)
             if req is None:
                 if not quiet:
-                    print(f"  ignoring command {frame[3]:02x} ({len(frame)} bytes)")
+                    # A frame shorter than a command byte used to index off the
+                    # end of it and take the whole serve session down with an
+                    # IndexError, which reads exactly like the core giving up.
+                    if len(frame) >= 4:
+                        print(f"  ignoring command {frame[3]:02x} ({len(frame)} bytes)")
+                    else:
+                        print(f"  ignoring a short frame ({len(frame)} bytes)")
                 continue
             level, tx, ty = req
             if once and (level, tx, ty) in done:

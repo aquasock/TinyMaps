@@ -422,9 +422,19 @@ always @(posedge clk or negedge resetn) begin
                 // line engine does not treat it as landed, count it, and start
                 // the wait before asking again.  The blocking path waits for
                 // `f_ack`, so without this a miss is a permanent stall.
+                //
+                // The retry timer is armed here only when the picture is not
+                // already falling back.  Arming it on every miss meant it never
+                // expired while the fallback was being drawn, because a fallback
+                // misses on almost every line: the epoch that is supposed to end
+                // the fallback never ended, the view's own level was never tried
+                // again, and the host was never told which fine tiles the picture
+                // wanted. It only recovered once the coarse level's own tiles were
+                // all resident and the misses stopped, which is why the picture
+                // sat blocky for seconds and sometimes never sharpened.
                 f_busy      <= 1'b0;
                 f_missed    <= 1'b1;
-                retry_cnt   <= TILE_RETRY[20:0];
+                if (!cfall) retry_cnt <= TILE_RETRY[20:0];
                 tile_misses <= tile_misses + 16'd1;
             end else if (!stream && rd_valid) begin
                 f_j <= f_j + 1'b1;

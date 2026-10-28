@@ -1702,3 +1702,36 @@ Give streaming its own clean run: tangload, send the level table, set a level-0 
 - User Test: PASS
 
 ---
+
+## 50 COMMIT Unreleased 2026-10-27T21:20:00-07:00
+
+#### Coming From:
+
+Unreleased 38112c2
+
+#### Purpose:
+
+Find out why the streaming picture never sharpens, having established that the renderer itself is now correct on hardware.
+
+#### Outcome:
+
+A real defect, found by reading the fallback's own timer and then reproduced in a new bench. The fallback is meant to be an epoch: draw from the level below for a while, then try the view's own level again so the host keeps learning which fine tiles the picture wants. But `retry_cnt` was reloaded on **every** miss, and a fallback misses on almost every line, so the epoch could not expire: the fine level was never retried and the host was never asked for a fine tile. That is what the board showed -- 126 requests over 16 tiles and not one for the level the picture wanted. The fix arms the timer when the fallback starts and leaves it alone inside the fallback. Two benches now bracket it: `tb_maps_stream_epoch.sv`, with an epoch many lines long, reports the pre-fix renderer still in fallback 400 lines later having never asked for the view's level, and the fixed one retrying at line 337. Why no existing test saw it is the same lesson as the line engine: `tb_maps_stream` runs its epoch at 200 clocks against 900-clock lines, a fraction of a line, while the top leaves `TILE_RETRY` at its 21'h1F_FFFF default, about 1270 lines. Two tool defects were found and fixed on the way: `serve_tiles.py` indexed past the end of a short frame while reporting an ignored command and took the whole serve session down with an IndexError, and its `--once` switch silently skips a tile it has already answered in the run, which converts any delivery failure into a picture that can never sharpen and hides the repeat requests that would say so. What is **not** established is that streaming now works: on hardware the core still asks for two to eight distinct tiles repeatedly, and the answers are sent and acknowledged. Three consecutive serve sessions ended with the board gone from USB -- `write failed: [Errno 19] No such device`, a request frame arriving with a nonsense tile coordinate, and no `/dev/ttyACM` afterwards -- each within about thirty seconds of the server starting, which is the same failure the handoff already recorded once and which the dead main power input makes plausible. A first attempt at a top-geometry streaming bench, `tb_maps_stream_wide.sv`, is left out of the suite because its pixel mismatches are its own line pacing rather than the design's, and citing it would be worse than not having it. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Settle the USB drop before blaming the fabric: power the board from the battery connector and watch whether a serve session survives a minute, since a board that leaves USB mid-transfer leaves a half-filled pool whatever the tile logic does. Then instrument rather than guess -- expose `maps_tiles`' own `hits`, `misses` and a commit counter through the status command, which is one rebuild and one run for the answer to "is a delivered tile resident", the question the last four sessions could not answer from outside the core.
+
+#### Files Modified:
+
+- fpga/tinymaps/maps_render.sv
+- sim/tb_maps_stream_epoch.sv
+- sim/tb_maps_stream_wide.sv
+- tools/serve_tiles.py
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---

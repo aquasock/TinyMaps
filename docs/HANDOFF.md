@@ -104,6 +104,26 @@
   every level the table advertises before judging a crossing, or advertise only
   the levels that are loaded.
 
+- **Open — streaming does not converge, and the board leaves USB.** The
+  fallback's retry timer was reloaded on every miss, so the epoch that is meant
+  to end the fallback could never expire and the host was never asked for a
+  fine tile; that is fixed and bracketed by `sim/tb_maps_stream_epoch.sv`
+  (pre-fix: still in fallback after 400 lines, no fine request; fixed: retries
+  at line 337). What is still open is whether a delivered tile becomes resident.
+  On hardware the core asks for two to eight distinct tiles over and over, the
+  host answers each with sixteen blocks and every block is acknowledged, and the
+  core asks again. Three serve sessions in a row ended with the board gone from
+  USB within about thirty seconds — `write failed: [Errno 19] No such device`, a
+  request frame carrying a nonsense tile coordinate, then no `/dev/ttyACM` — so
+  part of that behaviour may be a board that is leaving rather than a pool that
+  is not filling, and the dead main power input is the first thing to suspect.
+  The next move is an instrument, not another guess: `maps_tiles` already counts
+  `hits` and `misses`, they are wired to nothing, and putting them plus a commit
+  counter through the status command answers "is a delivered tile resident" in
+  one rebuild and one run. `sim/tb_maps_stream_wide.sv` is a first attempt at the
+  same question at the top's geometry and is deliberately not in the suite: its
+  pixel mismatches are its own line pacing, not the design's.
+
 - **The main power input is dead.** Measured 2026-10-26 after the link dropped
   during a pack load: 1.4 V at 1.5 A from a bench supply on that port (about
   0.9 ohm), 1.0 ohm across its VBUS and ground on a meter with 0.1 ohm of leads
