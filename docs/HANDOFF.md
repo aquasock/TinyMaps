@@ -80,8 +80,29 @@
   this design sat in before the change. The best artefact is
   `build/seed-3/open/tinymaps.a8ba28a06bf9.bin`; seed 2 at 75.62 MHz is the one
   to use if a particular board needs more margin than the picture needs speed.
-  Twenty of twenty simulations pass, the new bench included, and nothing has
-  been deployed — the board still runs the previous build.
+  Twenty of twenty simulations pass, the new bench included.
+
+- **Verified on hardware, and what that does and does not cover.**
+  `tinymaps.a8ba28a06bf9.bin` is on the Tang and all four levels of
+  `phoenix-18km.tmpk` are in its SDRAM. The user reports the map perfect while
+  still, panning and zooming within a level perfect, and level crossings working
+  once every level was loaded. That is the renderer and the line engine proven:
+  the stretch, the bars and the smear are gone, which was the fault this cycle
+  set out to fix. It does **not** cover streaming. Every one of those tests drew
+  from the pack in SDRAM; the tile pool was never shown to be feeding a picture.
+  One attempt with `serve_tiles.py` running ended with the core in the fallback,
+  asking only for level-1 tiles — 126 requests over 16 tiles and not one for the
+  level-0 tile it wanted — and that run is not evidence of a defect, because the
+  server had been killed twice mid-flight and the pool source is latched in the
+  fabric. Streaming needs its own clean run: tangload, level table, level-0 view,
+  then the server started once and left alone.
+
+- **A level crossing that shows static is an unloaded level, not a fault.** Cost
+  one round trip this cycle: only level 1 had been loaded, the level table still
+  said four levels were there, and crossing into level 0 or 2 read erased SDRAM —
+  0xFF through the palette, which looks like the old corruption and is not. Load
+  every level the table advertises before judging a crossing, or advertise only
+  the levels that are loaded.
 
 - **The main power input is dead.** Measured 2026-10-26 after the link dropped
   during a pack load: 1.4 V at 1.5 A from a bench supply on that port (about
@@ -108,11 +129,14 @@
   `tinymaps.46bc5de68231.bin` and now holds `tinymaps.8fe42ba24d8d.bin`; the
   board was running the loader build when the test image was loaded.
 
-- **On the Tang:** `/root/cores/console138k/tinymaps.bin` on the card holds the
-  loader-less image. `tangload /root/cores/console138k/tinymaps.bin` programs
-  the FPGA from the shell or from `TinyTang/tools/tinytang_run.py`, and the load
-  is to SRAM, so a power cycle returns the console core. To put the loader build
-  on the board, upload it with TinyTang's `tangput` first — it is not there yet.
+- **On the Tang:** `/root/cores/console138k/tinymaps.a8ba28a06bf9.bin` is the
+  build running as of 2026-10-27 — seed 3, 85.48 MHz, the line-engine fix — and
+  its SDRAM holds all four levels of `work/pack/phoenix-18km.tmpk` loaded with
+  `tools/load_pack.py --levels all`. `tangload` programs the FPGA from the shell
+  or from `TinyTang/tools/tinytang_run.py`, and a load that does not print
+  `tangload: core loaded` did nothing. The load is to SRAM, so a power cycle
+  returns the console core. `tinymaps.bin` on the card is an older image and not
+  what the board is running.
 
 - **Decisions that must not be re-litigated:**
   - **Fabric-only loader, no AE350.** The load is a memcpy with a checksum; an

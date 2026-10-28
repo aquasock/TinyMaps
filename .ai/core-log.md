@@ -1672,3 +1672,33 @@ Deploy `build/seed-3/open/tinymaps.a8ba28a06bf9.bin` when the user says so, serv
 - User Test: NOT RUN
 
 ---
+
+## 49 COMMIT Unreleased 2026-10-27T20:28:00-07:00
+
+#### Coming From:
+
+Unreleased 1526263
+
+#### Purpose:
+
+Put the line-engine fix on the Tang and find out whether the screen agrees with the bench.
+
+#### Outcome:
+
+`tinymaps.a8ba28a06bf9.bin` -- seed 3 at 85.48 MHz -- is loaded and running, with all four levels of `phoenix-18km.tmpk` in its SDRAM, and the user reports the map perfect while still, panning and zooming within a level perfect, and level crossings working. The stretch, the vertical bars and the smear are gone on hardware, which is the fault this cycle set out to fix and what the bench's 42/48 with no blocking fetches predicted. Two things need saying plainly rather than left to the next reader. The first is what the test does not cover: every one of those checks drew from the pack in SDRAM, and the tile pool was never shown feeding a picture, so streaming remains unproven. One attempt with `serve_tiles.py` running ended with the core in the fallback, asking only for level-1 tiles -- 126 requests over 16 tiles and not one for the level-0 tile it wanted -- and that is not evidence of a defect, because the server had been killed twice mid-flight and the pool source latches in the fabric. The second is a mistake made twice while setting the test up: the first frame was white with black speckles because the core had been reloaded and the pack had never been written to the SDRAM, so the renderer read erased memory, 0xFF through the palette; and an hour later a level crossing produced the same static because only level 1 had been loaded while the level table still advertised four. Both looked like corruption and neither was. Loading all four levels, 27.62 MiB at 191 kB/s and about two and a half minutes, settled the crossing. Two things were also learned about the tools that cost time: the tile server owns the console while it runs, so `read_status.py` fails until it stops, and a core left latched to the pool source with no server answering jams the link with tile requests until the FPGA is reloaded. A core-syntax audit was performed over the `.ai` diff; `core.md` is unchanged and this entry follows the template, ordering, prose and status rules.
+
+#### Next Steps:
+
+Give streaming its own clean run: tangload, send the level table, set a level-0 view, then start `serve_tiles.py` once and leave it alone, and watch whether the requests are for the view's own level and whether the fallback flag clears. If the core asks only for the coarse level with a server up, that is a real defect, and `read_status.py` between runs is the instrument: level, fallback flag, requests waiting, and the slot the address implies against the slot the table's hash gives for the same tile.
+
+#### Files Modified:
+
+- docs/HANDOFF.md
+
+#### Status:
+
+- Build: PASS
+- Deployment: PASS
+- User Test: PASS
+
+---
